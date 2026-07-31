@@ -1066,9 +1066,13 @@ Antwoord met UITSLUITEND geldige JSON, geen markdown: een array van 1 tot 3 rece
     suggestions = arr.slice(0,3).map(r=>({ ...r, id:'c'+uid() }));
     go('recipes','picks');
   }catch(e){
-    $('screen').innerHTML = `<h1 class="title hand">Niet gelukt</h1>
-      <p class="subtitle">De suggestie kwam niet door. Probeer het zo nog eens.</p>
-      <button class="btn wide" data-tab="home">Terug naar start</button>`;
+    const noKey = !aiKey();
+    $('screen').innerHTML = `<h1 class="title hand">${noKey ? 'AI-sleutel nodig' : 'Niet gelukt'}</h1>
+      <p class="subtitle">${noKey
+        ? 'Vul eerst je Anthropic API-sleutel in bij Jij → AI-sleutel; dan kan ik recepten bedenken.'
+        : 'De aanroep kwam niet door. Controleer je AI-sleutel en internetverbinding, en probeer het zo nog eens.'}</p>
+      <button class="btn fill wide" data-tab="profile">${ic('user','')} Naar AI-sleutel</button>
+      <button class="btn ghost wide" data-tab="home" style="margin-top:10px">Terug naar start</button>`;
   }
 }
 
