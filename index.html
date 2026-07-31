@@ -1,0 +1,1401 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Panklaar</title>
+<meta name="theme-color" content="#efe9dd">
+<meta name="description" content="Panklaar — hand-getekende kookapp: recepten, gezinsregels, voorraad via foto, en een kookstand met doorlopende timers.">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root{
+    --paper:#efe9dd;--card:#e7ded0;--card-2:#ded2c0;
+    --ink:#3a302a;--ink-soft:#7a6c5e;--line:#b8a98f;--accent:#4a3b30;
+    --cream:#f2ead9;--desk:#d4ccbe;--accent-soft:#7d6650;
+    /* one tint per meal type — replaces the brew-method tints */
+    --breakfast:#e8dcc3;--lunch:#e2dbcb;--dinner:#e3d3bf;--side:#dcd9cc;--sweet:#e7d7d0;--lunchtogo:#dde1cf;
+    --radius:26px;
+  }
+  html[data-theme="dark"]{
+    --paper:#262b28;--card:#2e3431;--card-2:#353c38;
+    --ink:#e9e4d4;--ink-soft:#9aa094;--line:#5a615c;--accent:#d9c9a8;
+    --cream:#1c211e;--desk:#181d1a;--accent-soft:#c2b191;
+    --breakfast:#343a30;--lunch:#31382f;--dinner:#333932;--side:#2e3532;--sweet:#363430;--lunchtogo:#2f3a33;
+  }
+  @media (prefers-color-scheme: dark){
+    html:not([data-theme="light"]){
+      --paper:#262b28;--card:#2e3431;--card-2:#353c38;
+      --ink:#e9e4d4;--ink-soft:#9aa094;--line:#5a615c;--accent:#d9c9a8;
+      --cream:#1c211e;--desk:#181d1a;--accent-soft:#c2b191;
+      --breakfast:#343a30;--lunch:#31382f;--dinner:#333932;--side:#2e3532;--sweet:#363430;--lunchtogo:#2f3a33;
+    }
+  }
+
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0;}
+  html,body{height:100%;overflow:hidden;}
+  body{
+    background:var(--desk);color:var(--ink);font-size:18px;
+    display:flex;justify-content:center;
+    font-family:'Segoe Print','Bradley Hand','Chalkboard SE','Comic Sans MS',cursive;
+  }
+  .hand{font-weight:700;letter-spacing:.4px;}
+
+  .phone{width:100%;max-width:430px;height:100vh;height:100dvh;background:var(--paper);
+    position:relative;display:flex;flex-direction:column;overflow:hidden;transition:background .45s;}
+  .screen{flex:1;min-height:0;overflow-y:auto;padding:0 22px 120px;-webkit-overflow-scrolling:touch;}
+  .screen::-webkit-scrollbar{display:none;}
+  svg.defs{position:absolute;width:0;height:0;}
+
+  /* ---- the hand-drawn shell every surface sits in ---- */
+  .sketch{position:relative;background:var(--card);border-radius:var(--radius);
+    border:2px solid var(--ink);filter:url(#wobble);}
+  .sketch.soft{border-color:var(--line);}
+
+  h1.title{font-size:42px;line-height:1;margin:14px 0 0;}
+  .subtitle{color:var(--ink-soft);font-size:19px;margin-bottom:16px;}
+  .eyebrow{color:var(--ink-soft);font-size:18px;display:flex;justify-content:space-between;
+    align-items:center;margin:22px 4px 10px;}
+  .eyebrow button{background:none;border:none;font-family:inherit;color:var(--ink-soft);
+    font-size:16px;border-bottom:1.5px solid var(--line);cursor:pointer;padding:0;}
+
+  .card{padding:15px 18px;margin-bottom:14px;}
+  .row{display:flex;align-items:center;gap:14px;}
+  .grow{flex:1;min-width:0;}
+  .name{font-size:23px;line-height:1.05;}
+  .meta{color:var(--ink-soft);font-size:16px;margin-top:4px;}
+  .muted{color:var(--ink-soft);}
+
+  .btn{font-family:inherit;cursor:pointer;border:2px solid var(--ink);filter:url(#wobble);
+    border-radius:16px;padding:13px 18px;font-size:22px;background:var(--card);color:var(--ink);}
+  .btn:active{background:var(--card-2);}
+  .btn.fill{background:var(--accent-soft);color:var(--cream);}
+  .btn.fill:active{filter:url(#wobble) brightness(.9);}
+  .btn.wide{width:100%;display:flex;align-items:center;justify-content:center;gap:10px;}
+  .btn.ghost{border-color:var(--line);background:none;font-size:18px;padding:10px 14px;}
+  .btn svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;
+    stroke-linecap:round;stroke-linejoin:round;}
+
+  .big-btn{width:100%;margin-bottom:16px;padding:14px 18px;display:flex;align-items:center;
+    gap:14px;text-align:left;}
+  .big-btn .ic{flex:none;width:42px;height:42px;display:flex;align-items:center;justify-content:center;}
+  .big-btn .ic svg{width:36px;height:36px;fill:none;stroke:var(--cream);stroke-width:1.6;
+    stroke-linecap:round;stroke-linejoin:round;filter:url(#wobble-rough);}
+  .big-btn .txt{display:flex;flex-direction:column;line-height:1.14;min-width:0;}
+  .big-btn .h{font-size:26px;}
+  .big-btn .sub{font-size:15px;opacity:.85;}
+
+  /* meal-type chips */
+  .chips{display:flex;gap:8px;flex-wrap:wrap;}
+  .chip{font-family:inherit;font-size:17px;padding:7px 14px;border-radius:14px;cursor:pointer;
+    border:2px solid var(--line);background:none;color:var(--ink-soft);filter:url(#wobble-h);}
+  .chip.on{border-color:var(--ink);color:var(--ink);}
+  .tag{display:inline-block;font-size:15px;padding:3px 11px;border-radius:12px;
+    border:1.5px solid var(--line);filter:url(#wobble-h);color:var(--ink-soft);}
+
+  .field{margin-bottom:14px;}
+  .field label{display:block;color:var(--ink-soft);font-size:17px;margin:0 0 5px 4px;}
+  .inp{width:100%;background:var(--card);border:2px solid var(--line);filter:url(#wobble);
+    border-radius:16px;padding:12px 16px;font-family:inherit;font-size:20px;color:var(--ink);
+    outline:none;resize:vertical;}
+  .inp::placeholder{color:var(--ink-soft);opacity:.75;}
+  .split{display:flex;gap:10px;}
+  .split .field{flex:1;}
+
+  .list-item{display:flex;align-items:center;gap:12px;padding:12px 16px;margin-bottom:10px;}
+  .tickbox{width:26px;height:26px;flex:none;border:2px solid var(--ink);border-radius:9px;
+    filter:url(#wobble);display:flex;align-items:center;justify-content:center;cursor:pointer;background:none;}
+  .tickbox svg{width:17px;height:17px;fill:none;stroke:var(--ink);stroke-width:2.6;
+    stroke-linecap:round;stroke-linejoin:round;opacity:0;}
+  .tickbox.on svg{opacity:1;}
+  .done{color:var(--ink-soft);text-decoration:line-through;}
+
+  .icon-btn{background:none;border:none;cursor:pointer;padding:6px;line-height:0;font-family:inherit;}
+  .icon-btn svg{width:22px;height:22px;fill:none;stroke:var(--ink-soft);stroke-width:2;
+    stroke-linecap:round;stroke-linejoin:round;filter:url(#wobble-rough);}
+
+  .detail-top{display:flex;align-items:center;justify-content:space-between;padding:14px 0 2px;gap:10px;}
+  .detail-top .h{font-size:34px;line-height:1;}
+  .back{background:none;border:none;cursor:pointer;padding:0;line-height:0;}
+  .back svg{width:28px;height:28px;fill:none;stroke:var(--ink);stroke-width:2.2;
+    stroke-linecap:round;stroke-linejoin:round;filter:url(#wobble-rough);}
+
+  .stat-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .stat .k{color:var(--ink-soft);font-size:15px;}
+  .stat .v{font-size:24px;line-height:1;margin-top:3px;}
+
+  .step{display:flex;gap:12px;padding:11px 0;border-bottom:1.5px solid var(--line);}
+  .step:last-child{border-bottom:none;}
+  .step .n{font-size:22px;line-height:1;color:var(--accent-soft);flex:none;width:22px;}
+  .step .tx{flex:1;font-size:18px;line-height:1.4;}
+
+  .draw{display:flex;justify-content:center;margin:6px 0;}
+  .draw svg{width:100%;max-width:250px;height:auto;fill:none;stroke:var(--ink);stroke-width:1.7;
+    stroke-linecap:round;stroke-linejoin:round;filter:url(#wobble-rough);}
+  .draw svg .soft{stroke:var(--ink-soft);stroke-width:1.4;}
+
+  .empty{text-align:center;color:var(--ink-soft);padding:18px 10px 6px;}
+  .empty p{font-size:18px;line-height:1.45;max-width:290px;margin:8px auto 0;}
+
+  .toast{position:absolute;left:16px;right:16px;bottom:96px;z-index:80;background:var(--accent-soft);
+    color:var(--cream);border:2px solid var(--ink);filter:url(#wobble);border-radius:18px;
+    padding:11px 16px;font-size:18px;text-align:center;
+    opacity:0;visibility:hidden;pointer-events:none;
+    transform:translateY(140%);transition:transform .4s cubic-bezier(.22,1,.36,1),opacity .3s,visibility .4s;}
+  .toast.on{transform:translateY(0);opacity:1;visibility:visible;}
+
+  /* ---- cook mode ---- */
+  .cook{position:absolute;inset:0;z-index:90;background:var(--paper);display:none;
+    flex-direction:column;padding:18px 22px 26px;}
+  .cook.on{display:flex;}
+  .cook-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+  .cook-body{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;justify-content:center;}
+  .cook-body::-webkit-scrollbar{display:none;}
+  .cook-n{color:var(--ink-soft);font-size:18px;}
+  .cook-tx{font-size:27px;line-height:1.35;margin-top:10px;}
+  .cook-peek{margin-top:24px;padding-top:14px;border-top:2px dashed var(--line);opacity:.55;}
+  .cook-peek .lbl{font-size:14px;letter-spacing:.6px;text-transform:uppercase;color:var(--ink-soft);margin-bottom:5px;}
+  .cook-peek .ptx{font-size:19px;line-height:1.32;color:var(--ink-soft);}
+  .cook-timers{display:flex;flex-wrap:wrap;gap:10px 12px;margin:2px 0 6px;padding-top:4px;}
+  .tchip{position:relative;display:flex;flex-direction:column;align-items:flex-start;background:var(--card);
+    border:2px solid var(--ink);filter:url(#wobble);border-radius:16px;padding:8px 14px;min-width:92px;}
+  .tchip.done{background:var(--accent-soft);}
+  .tchip.paused{opacity:.6;}
+  .tchip-time{font-size:26px;line-height:1;cursor:pointer;color:var(--ink);}
+  .tchip.done .tchip-time{color:var(--cream);}
+  .tchip-lbl{font-size:14px;color:var(--ink-soft);margin-top:2px;max-width:150px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;}
+  .tchip.done .tchip-lbl{color:var(--cream);}
+  .tchip-x{position:absolute;top:-9px;right:-9px;width:24px;height:24px;border-radius:50%;border:2px solid var(--ink);
+    background:var(--paper);color:var(--ink);font-size:16px;line-height:1;cursor:pointer;font-family:inherit;
+    display:flex;align-items:center;justify-content:center;filter:url(#wobble);}
+  .cook-add-t{margin-top:18px;}
+  .timerbar{position:absolute;left:12px;right:12px;bottom:92px;z-index:70;display:none;flex-wrap:wrap;
+    gap:10px;justify-content:center;}
+  .timer{margin-top:22px;padding:16px;text-align:center;}
+  .timer .clock{font-size:52px;line-height:1;}
+  .cook-nav{display:flex;gap:10px;margin-top:14px;}
+  .cook-nav .btn{flex:1;justify-content:center;display:flex;}
+
+  /* ---- bottom tab bar ---- */
+  .nav{position:absolute;bottom:0;left:0;right:0;background:color-mix(in srgb, var(--card-2) 60%, transparent);
+    backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);display:flex;justify-content:space-around;
+    padding:7px 4px 20px;border-top:1.5px solid var(--line);z-index:60;}
+  .nav button{background:none;border:none;color:var(--ink-soft);font-size:12px;display:flex;
+    flex-direction:column;align-items:center;gap:3px;cursor:pointer;font-family:inherit;padding:4px 6px;}
+  .navic{width:23px;height:23px;fill:none;stroke:var(--ink-soft);stroke-width:2;
+    stroke-linecap:round;stroke-linejoin:round;filter:url(#wobble);}
+  .nav button.on{color:var(--ink);}
+  .nav button.on .navic{stroke:var(--ink);transform:scale(1.1);}
+
+  .fam-chev{line-height:0;flex:none;}
+  .fam-chev svg{width:26px;height:26px;fill:none;stroke:var(--ink-soft);stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;filter:url(#wobble-rough);transition:transform .2s;}
+  .fam-chev.open svg{transform:rotate(180deg);}
+  .sheet{position:absolute;inset:0;z-index:85;background:rgba(0,0,0,.35);display:none;align-items:flex-end;}
+  .sheet.on{display:flex;}
+  .sheet-card{width:100%;max-height:90%;overflow-y:auto;background:var(--paper);border-radius:26px 26px 0 0;
+    border:2px solid var(--ink);border-bottom:none;padding:16px 20px 26px;}
+  .sheet-card::-webkit-scrollbar{display:none;}
+  .pref-row{display:flex;align-items:center;gap:12px;margin-bottom:14px;}
+  .pref-row>span:first-child{width:78px;flex:none;font-size:19px;}
+  .pref-val{width:46px;text-align:right;flex:none;font-size:21px;}
+  input[type=range]{-webkit-appearance:none;appearance:none;height:8px;border-radius:6px;background:var(--card-2);
+    outline:none;flex:1;min-width:0;border:1.5px solid var(--line);}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:26px;height:26px;border-radius:50%;
+    background:var(--accent-soft);border:2px solid var(--ink);cursor:pointer;}
+  input[type=range]::-moz-range-thumb{width:24px;height:24px;border-radius:50%;background:var(--accent-soft);
+    border:2px solid var(--ink);cursor:pointer;}
+  @media (prefers-reduced-motion: reduce){*{transition:none!important;}}
+  :focus-visible{outline:2.5px solid var(--accent-soft);outline-offset:3px;}
+</style>
+</head>
+<body>
+
+<svg class="defs" aria-hidden="true">
+  <filter id="wobble"><feTurbulence type="fractalNoise" baseFrequency="0.018" numOctaves="2" seed="7" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="4"/></filter>
+  <filter id="wobble-h"><feTurbulence type="fractalNoise" baseFrequency="0.012 0.04" numOctaves="2" seed="3" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="3"/></filter>
+  <filter id="wobble-rough"><feTurbulence type="fractalNoise" baseFrequency="0.05" numOctaves="3" seed="11" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="2.2"/></filter>
+</svg>
+
+<div class="phone">
+  <div class="screen" id="screen"></div>
+
+  <div class="cook" id="cook">
+    <div class="cook-head">
+      <button class="back" id="cookExit" aria-label="Kookstand verlaten">
+        <svg viewBox="0 0 24 24"><path d="M18.4 5.4 5.7 18.3M5.5 5.6l12.9 12.7"/></svg>
+      </button>
+      <span class="cook-n" id="cookCount"></span>
+    </div>
+    <div class="cook-timers" id="cookTimers" style="display:none"></div>
+    <div class="cook-body">
+      <div id="cookStep"></div>
+      <div id="cookTimerAdd"></div>
+      <div class="cook-peek" id="cookPeek" style="display:none"></div>
+    </div>
+    <div class="cook-nav">
+      <button class="btn" id="cookPrev">Terug</button>
+      <button class="btn fill" id="cookNext">Volgende</button>
+    </div>
+  </div>
+
+  <div class="sheet" id="ask">
+    <div class="sheet-card"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <div class="timerbar" id="timerbar"></div>
+
+  <nav class="nav" id="nav"></nav>
+</div>
+
+<script>
+/* ============================================================
+   Storage — one thin layer, one key.
+   Swap the two functions below for IndexedDB when you ship this
+   as a standalone PWA; nothing else in the app touches storage.
+   ============================================================ */
+const KEY = 'panklaar:v1';
+let mem = null;
+
+/* IndexedDB als primaire opslag (standalone site); valt terug op de
+   Artifact-opslag (window.storage) en anders op in-memory. */
+function idbOpen(){
+  return new Promise((res,rej)=>{
+    let r;
+    try{ r = indexedDB.open('panklaar',1); }catch(e){ return rej(e); }
+    r.onupgradeneeded = ()=>{ if(!r.result.objectStoreNames.contains('kv')) r.result.createObjectStore('kv'); };
+    r.onsuccess = ()=>res(r.result);
+    r.onerror = ()=>rej(r.error);
+  });
+}
+function idbReq(mode, fn){
+  return idbOpen().then(db=>new Promise((res,rej)=>{
+    const q = fn(db.transaction('kv', mode).objectStore('kv'));
+    q.onsuccess = ()=>res(q.result);
+    q.onerror = ()=>rej(q.error);
+  }));
+}
+
+async function loadData(){
+  try{ const v = await idbReq('readonly', s=>s.get(KEY)); if(v) return typeof v==='string'?JSON.parse(v):v; }catch(e){}
+  try{ if(window.storage){ const r = await window.storage.get(KEY); if(r && r.value) return JSON.parse(r.value); } }catch(e){}
+  return mem;
+}
+async function saveData(d){
+  mem = d;
+  const json = JSON.stringify(d);
+  try{ await idbReq('readwrite', s=>s.put(json, KEY)); return true; }catch(e){}
+  try{ if(window.storage){ await window.storage.set(KEY, json); return true; } }catch(e){}
+  return false;
+}
+
+/* AI-sleutel — alleen op dit apparaat (localStorage) */
+function aiKey(){ try{ return (localStorage.getItem('panklaar_ai_key')||'').trim(); }catch(e){ return ''; } }
+function aiHeaders(){
+  const h = {'Content-Type':'application/json'};
+  const k = aiKey();
+  if(k){ h['x-api-key'] = k; h['anthropic-version'] = '2023-06-01'; h['anthropic-dangerous-direct-browser-access'] = 'true'; }
+  return h;
+}
+
+/* ---------------- state ---------------- */
+const TYPES = [
+  {id:'breakfast', label:'Ontbijt', v:'--breakfast'},
+  {id:'lunch',     label:'Lunch',     v:'--lunch'},
+  {id:'lunchtogo', label:'Lunch to go', v:'--lunchtogo'},
+  {id:'dinner',    label:'Avondeten', v:'--dinner'},
+  {id:'side',      label:'Bijgerecht', v:'--side'},
+  {id:'sweet',     label:'Zoet', v:'--sweet'}
+];
+const LEVELS = ['easy','medium','hard'];
+const LEVEL_NL = {easy:'makkelijk', medium:'gemiddeld', hard:'pittig'};
+const DAYS = ['Ma','Di','Wo','Do','Vr','Za','Zo'];
+
+/* ---------------- gezinsleden & voedingsrichtlijnen ----------------
+   Levensfasen/situaties met bijbehorende regels. De regels volgen de
+   publieke richtlijnen van gerenommeerde instituties — voor Nederland
+   vooral het Voedingscentrum, aangevuld met RIVM en WHO. Het zijn
+   algemene richtlijnen, geen persoonlijk medisch advies.               */
+const NUTRI_DISCLAIMER = 'Algemene richtlijnen van het Voedingscentrum (aangevuld met RIVM en WHO). Geen persoonlijk medisch advies — overleg bij twijfel met je verloskundige, huisarts, diëtist of het consultatiebureau.';
+
+const STAGES = [
+  {id:'pregnant',      label:'Zwanger'},
+  {id:'breastfeeding', label:'Borstvoeding'},
+  {id:'unborn',        label:'Ongeboren baby'},
+  {id:'infant_6_12',   label:'Baby 6–12 mnd'},
+  {id:'toddler_1_3',   label:'Peuter 1–3 jaar'},
+  {id:'child_4_12',    label:'Kind 4–12 jaar'},
+  {id:'none',          label:'Geen bijzonderheden'}
+];
+const stageLabel = id => (STAGES.find(s=>s.id===id)||{label:id}).label;
+
+/* per situatie: avoid = niet eten, limit = beperken, ok = let op/mag wel */
+const STAGE_RULES = {
+  pregnant:{ src:'Voedingscentrum — Zwangerschap',
+    avoid:[
+      'Rauw en niet-doorbakken vlees; rauwe vleeswaren (carpaccio, filet américain, rauwe ham)',
+      'Rauwe en gerookte vis, rauwe schaal- en schelpdieren; gerookte/voorverpakte vis alleen goed verhit',
+      'Rauwmelkse en zachte schimmelkazen (brie, camembert, blauwaderkaas, feta van rauwe melk)',
+      'Rauw ei en gerechten met rauw ei (zelfgemaakte mayonaise, mousse, tiramisu)',
+      'Lever en leverproducten (paté, leverworst) — te veel vitamine A',
+      'Alcohol' ],
+    limit:[
+      'Cafeïne: max ± 200 mg per dag (ongeveer 2 koppen koffie)',
+      'Roofvis zoals tonijn, zwaardvis en paling — i.v.m. kwik' ],
+    ok:[
+      'Goed verhit vlees, vis en ei',
+      'Gepasteuriseerde en harde kazen',
+      'Was rauwe groente en fruit goed (toxoplasmose)' ],
+    note:'De bescherming loopt via wat de zwangere eet.' },
+  breastfeeding:{ src:'Voedingscentrum — Borstvoeding',
+    avoid:[ 'Alcohol (of sterk beperken en timen rond het voeden)' ],
+    limit:[
+      'Cafeïne: max ± 200–300 mg per dag (kan de baby onrustig maken)',
+      'Roofvis (tonijn, zwaardvis, paling) i.v.m. kwik' ],
+    ok:[
+      'Gevarieerd en volwaardig eten, voldoende vocht',
+      'Rauwmelkse kaas en verse vleeswaren mogen weer — minder streng dan tijdens de zwangerschap' ],
+    note:'Vitamine D-supplement voor moeder en baby staat los van de recepten.' },
+  unborn:{ src:'Voedingscentrum — Zwangerschap',
+    avoid:[], limit:[], ok:[],
+    note:'Een ongeboren baby eet niet zelf. De bescherming loopt volledig via het dieet van de zwangere — zie de regels bij ‘Zwanger’.' },
+  infant_6_12:{ src:'Voedingscentrum — Baby 6–12 maanden',
+    avoid:[
+      'Honing (pas vanaf 12 maanden i.v.m. botulisme)',
+      'Verslikkingsgevaar: hele noten, hele druiven/kersttomaten, harde stukjes — fijnmaken of vermijden',
+      'Rauwmelkse kaas en rauw/onvoldoende verhit ei, vlees en vis',
+      'Toegevoegd zout en toegevoegde suiker',
+      'Rijstdranken als melkvervanger (arseen)' ],
+    limit:[
+      'Koemelk als drank (kleine hoeveelheden door de pap mag)',
+      'Roofvis i.v.m. kwik' ],
+    ok:[
+      'Zacht, fijngeprakt of in zachte reepjes',
+      'Introduceer allergenen (ei, pinda, gluten) juist op tijd en gevarieerd' ],
+    note:'' },
+  toddler_1_3:{ src:'Voedingscentrum — Peuter 1–3 jaar',
+    avoid:[
+      'Verslikkingsgevaar: hele noten, hele druiven/kersttomaten, harde snoepjes, stukjes harde rauwe groente — klein snijden of vermijden',
+      'Rauwmelkse kaas en rauw/onvoldoende verhit ei, vlees en vis',
+      'Zoetstoffen en light-producten' ],
+    limit:[
+      'Zout: voeg geen zout toe, vermijd sterk gezouten producten (richtlijn max ± 2–3 g/dag)',
+      'Toegevoegde suiker',
+      'Roofvis (kwik) en rijstdranken (arseen)' ],
+    ok:[
+      'Honing mag vanaf 12 maanden',
+      'Volle zuivel (vet is nodig), klein gesneden en zachte texturen' ],
+    note:'' },
+  child_4_12:{ src:'Voedingscentrum — Kind 4–12 jaar',
+    avoid:[ 'Rauwmelkse kaas en rauw/onvoldoende verhit ei, vlees en vis' ],
+    limit:[ 'Zout en toegevoegde suiker', 'Roofvis i.v.m. kwik' ],
+    ok:[ 'Zoveel mogelijk mee-eten met het gezin, gevarieerd volgens de Schijf van Vijf' ],
+    note:'' },
+  none:{ src:'', avoid:[], limit:[], ok:[], note:'Geen bijzondere voedingsregels.' }
+};
+
+/* alle regels van een lid: samengevoegd over zijn situaties */
+function memberRules(m){
+  const avoid=[], limit=[], ok=[], notes=[], srcs=[];
+  (m.stages||[]).forEach(id=>{
+    const r = STAGE_RULES[id]; if(!r) return;
+    r.avoid.forEach(x=>{ if(!avoid.includes(x)) avoid.push(x); });
+    r.limit.forEach(x=>{ if(!limit.includes(x)) limit.push(x); });
+    r.ok.forEach(x=>{ if(!ok.includes(x)) ok.push(x); });
+    if(r.note && !notes.includes(r.note)) notes.push(r.note);
+    if(r.src && !srcs.includes(r.src)) srcs.push(r.src);
+  });
+  return {avoid, limit, ok, notes, srcs};
+}
+
+function seedFamily(){
+  return [
+    {id:uid(), name:'Jesse', stages:['none'],                     eat:true,  note:''},
+    {id:uid(), name:'Zoë',   stages:['pregnant','breastfeeding'], eat:true,  note:''},
+    {id:uid(), name:'Leah',  stages:['toddler_1_3'],              eat:true,  note:'1 jaar'},
+    {id:uid(), name:'Baby',  stages:['unborn'],                   eat:false, note:'Ongeboren'}
+  ];
+}
+
+/* ---------------- keukenapparatuur ---------------- */
+const EQUIPMENT = [
+  {id:'hob',       label:'Kookplaat / fornuis', def:true},
+  {id:'oven',      label:'Oven',               def:true},
+  {id:'micro',     label:'Magnetron',          def:true},
+  {id:'kettle',    label:'Waterkoker',         def:true},
+  {id:'airfryer',  label:'Airfryer',           def:false},
+  {id:'fryer',     label:'Frituurpan',         def:false},
+  {id:'wok',       label:'Wok',                def:false},
+  {id:'grill',     label:'Contactgrill / tosti', def:false},
+  {id:'bbq',       label:'BBQ / grill',        def:false},
+  {id:'blender',   label:'Blender / staafmixer', def:false},
+  {id:'processor', label:'Keukenmachine',      def:false},
+  {id:'mixer',     label:'Handmixer (bakken)', def:false},
+  {id:'slow',      label:'Slowcooker',         def:false},
+  {id:'pressure',  label:'Snelkookpan',        def:false},
+  {id:'ricecooker',label:'Rijstkoker',         def:false},
+  {id:'steamer',   label:'Stoompan / stomer',  def:false},
+  {id:'toaster',   label:'Broodrooster',       def:false}
+];
+function seedEquip(){ return EQUIPMENT.filter(e=>e.def).map(e=>e.id); }
+
+/* ---------------- voorkeuren (AI-richtlijnen) ---------------- */
+const PREF_FLAGS = [
+  {id:'budget',      label:'Budget',            hint:'houd het goedkoop en budgetvriendelijk'},
+  {id:'snel',        label:'Snel koken',        hint:'snel klaar — richt op max 20–30 min en weinig stappen'},
+  {id:'gevarieerd',  label:'Gevarieerd',        hint:'iets afwisselends, niet het standaard recept'},
+  {id:'weer',        label:'Past bij het weer', hint:'passend bij het huidige weer en seizoen'},
+  {id:'restjes',     label:'Restjes gebruiken', hint:'gebruik houdbare, restjesvriendelijke ingrediënten en beperk verspilling'},
+  {id:'kind',        label:'Kindvriendelijk',   hint:'kindvriendelijk en mild gekruid'},
+  {id:'eenpans',     label:'Weinig afwas',      hint:'zo min mogelijk afwas, het liefst één pan'},
+  {id:'gezond',      label:'Gezond',            hint:'gezond en volgens de Schijf van Vijf'}
+];
+const DEFAULT_PREFS = {veg:7, fish:1, meat:3, flags:['gevarieerd']};
+
+let S = {
+  recipes:[], shopping:[], pantry:[], plan:{}, theme:'auto', family:[], equip:[], prefs:{veg:7,fish:1,meat:3,flags:[]}, timers:[],
+  tab:'home', view:null, arg:null, filter:'all'
+};
+let famOpen = false, prefOpen = false, equipOpen = false, pantOpen = false, ask = null, suggestions = [];
+
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+
+function seed(){
+  return [
+    {id:uid(), name:'Pasta met courgette en citroen', type:'dinner', mins:20, serves:4, level:'easy',
+     ingredients:['300 g pasta','2 courgettes','1 citroen','2 tenen knoflook','olijfolie','parmezaan'],
+     steps:['Zet water op en kook de pasta 9 min beetgaar.','Snijd de courgette in halve maantjes.','Bak de courgette 6 min op hoog vuur met de knoflook.','Meng alles met citroenrasp, olie en kaas.']},
+    {id:uid(), name:'Wraps met kip en yoghurtsaus', type:'lunch', mins:15, serves:2, level:'easy',
+     ingredients:['4 wraps','300 g kipfilet','1 komkommer','200 g yoghurt','paprikapoeder'],
+     steps:['Snijd de kip in reepjes en kruid met paprikapoeder.','Bak de kip 8 min tot hij gaar is.','Roer de yoghurt los met zout en peper.','Vul de wraps en rol ze strak op.']}
+  ];
+}
+
+/* ---------------- icons (never emoji) ---------------- */
+const I = {
+  home:'<path d="M4.2 11.3 12.1 4.6l7.8 6.6M6.3 10.2v9.1h11.5v-9.2M10.2 19.2v-5.1h3.8v5.2"/>',
+  book:'<path d="M4.3 5.1c2.6-.6 5.3-.5 7.7.7 2.4-1.3 5.1-1.4 7.7-.8M4.2 5.2v13.4c2.7-.6 5.4-.5 7.8.8 2.4-1.3 5-1.4 7.7-.8V5.3M12 5.9v13.4"/>',
+  cart:'<path d="M3.4 4.6h2.6l2.4 9.6h8.7l2.2-7.1H7.2M9.4 18.6a1.2 1.2 0 1 0 .1 0M17 18.6a1.2 1.2 0 1 0 .1 0"/>',
+  cal:'<path d="M4.6 6.4h14.8v12.9H4.7V6.5zM8.2 3.9v4.2M15.9 3.8v4.3M4.8 10.9h14.5"/>',
+  user:'<path d="M12 4.4c2 0 3.5 1.6 3.5 3.6S14 11.7 12 11.7 8.4 10 8.4 8s1.6-3.6 3.6-3.6zM5 19.6c.6-3.3 3.5-5.1 7-5.1s6.4 1.8 7 5.2"/>',
+  plus:'<path d="M12 5.3v13.4M5.3 12h13.4"/>',
+  spark:'<path d="M12 3.6c.9 3.7 2.7 5.6 6.4 6.5-3.7.8-5.6 2.7-6.4 6.4-.8-3.7-2.7-5.6-6.4-6.4 3.7-.9 5.6-2.8 6.4-6.5zM17.9 15.6c.4 1.8 1.3 2.7 3.1 3.1-1.8.4-2.7 1.3-3.1 3.1-.4-1.8-1.3-2.7-3.1-3.1 1.8-.4 2.7-1.3 3.1-3.1z"/>',
+  flame:'<path d="M12.1 3.4c3.4 3.6 5.6 6.3 5.6 9.4a5.7 5.7 0 0 1-11.4 0c0-2 .9-3.6 2.3-5.1.2 1.3.7 2.1 1.7 2.5-.3-2.4-.1-4.5 1.8-6.8z"/>',
+  trash:'<path d="M5.4 6.7h13.2M9.6 6.6V4.4h4.8v2.3M7 6.8l.8 12.4h8.4l.8-12.5"/>',
+  back:'<path d="M14.8 5.3 7.4 12.1l7.4 6.6"/>',
+  check:'<path d="M5.2 12.4 9.7 17 18.7 6.8"/>',
+  edit:'<path d="M16.5 4.4 19.6 7.4 8.4 18.6l-4 .9 1-3.9L16.5 4.4z"/>',
+  pot:'<path d="M5.3 9.4h13.4v5.2c0 2.5-2 4.4-4.5 4.4H9.8c-2.5 0-4.5-2-4.5-4.4V9.5zM5.2 11.2H3.4M18.8 11.1h1.8M9.4 6.6c0-1.2 1.2-1.3 1.2-2.5M13.4 6.5c0-1.2 1.2-1.3 1.2-2.5"/>',
+  chev:'<path d="M6.2 9 12 14.6 17.8 9"/>',
+  camera:'<path d="M4.4 8.5h3l1.4-2.2h6.4l1.4 2.2h3v10.1H4.3V8.6M14.6 12.4c1 1.4.4 3.3-1.2 4-1.7.5-3.4-.7-3.5-2.5-.1-1.5 1.2-2.9 2.8-2.7 .9.1 1.6.6 2 1.3"/>',
+  save:'<path d="M6.5 4.6h11v14.8l-5.5-3.7-5.5 3.7z"/>'
+};
+const ic = (n, cls='navic') => `<svg class="${cls}" viewBox="0 0 24 24">${I[n]}</svg>`;
+
+/* a pan, traced twice — each contour drawn again with a slightly
+   different hand, corners overshot, circles left slightly open */
+const PAN_DRAWING = `
+<div class="draw"><svg viewBox="0 0 240 140">
+  <path d="M34 62 L150 61.5 L146 96 C143 111 130 119 108 119 C74 119 56 112 50 96 Z"/>
+  <path d="M35.5 63.5 L149 63 L145 97.5 C141 112 129 121 107 120.5 C73 120 57 113 51.5 97.5 Z"/>
+  <path d="M150 70 C176 66 198 63 214 62"/>
+  <path d="M150.5 72.5 C177 68.5 199 65 215 63.5"/>
+  <path d="M212 60 C221 60.5 224 63 224 66 C224 69 220 71.5 213 71"/>
+  <path d="M213 61.5 C222 62 225.5 64.5 225 67.5 C224.5 70 219 72.5 213.5 72.5"/>
+  <path class="soft" d="M74 47 C78 39 74 35 78 27"/>
+  <path class="soft" d="M96 45 C100 37 96 33 100 25"/>
+  <path class="soft" d="M118 48 C122 40 118 36 122 28"/>
+</svg></div>`;
+
+/* ---------------- shell ---------------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+let toastTimer;
+function toast(msg){
+  const t = $('toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('on'), 2400);
+}
+
+function go(tab, view=null, arg=null){
+  S.tab = tab; S.view = view; S.arg = arg;
+  render(); $('screen').scrollTop = 0;
+}
+
+function renderNav(){
+  const tabs = [['home','Start','home'],['recipes','Recepten','book'],['shopping','Lijst','cart'],['plan','Week','cal'],['profile','Jij','user']];
+  $('nav').innerHTML = tabs.map(([id,label,icon]) =>
+    `<button class="${S.tab===id?'on':''}" data-tab="${id}">${ic(icon)}<span>${label}</span></button>`).join('');
+}
+
+function render(){
+  renderNav();
+  const v = {home:viewHome, recipes:viewRecipes, shopping:viewShopping, plan:viewPlan, profile:viewProfile}[S.tab];
+  $('screen').innerHTML = S.view === 'detail'     ? viewDetail(S.arg)
+                        : S.view === 'edit'       ? viewEdit(S.arg)
+                        : S.view === 'member'     ? viewMember(S.arg)
+                        : S.view === 'memberEdit' ? viewMemberEdit(S.arg)
+                        : S.view === 'picks'      ? viewPicks()
+                        : S.view === 'cand'       ? viewCandidate(S.arg)
+                        : v();
+}
+
+/* ---------------- screens ---------------- */
+function typeOf(id){ return TYPES.find(t=>t.id===id) || TYPES.find(t=>t.id==='dinner'); }
+
+function recipeCard(r){
+  return `<div class="sketch card" data-open="${r.id}" style="background:var(${typeOf(r.type).v})">
+    <div class="row">
+      <div class="grow">
+        <div class="name hand">${esc(r.name)}</div>
+        <div class="meta">${r.mins} min · ${r.serves} pers. · ${LEVEL_NL[r.level]||r.level}</div>
+      </div>
+      <span class="tag">${typeOf(r.type).label}</span>
+    </div>
+  </div>`;
+}
+
+function viewHome(){
+  const today = DAYS[(new Date().getDay()+6)%7];
+  const planned = S.plan[today] ? S.recipes.find(r=>r.id===S.plan[today]) : null;
+  const recent = S.recipes.slice(-3).reverse();
+  return `
+    <h1 class="title hand">Panklaar</h1>
+    <p class="subtitle">Jouw recepten, in je eigen handschrift.</p>
+    ${PAN_DRAWING}
+    <button class="btn fill big-btn" data-go="suggest">
+      <span class="ic">${ic('spark','')}</span>
+      <span class="txt"><span class="h hand">Wat kan ik koken?</span>
+      <span class="sub">Op basis van wat je in huis hebt</span></span>
+    </button>
+    <div class="eyebrow"><span>Vanavond (${today})</span><button data-tab="plan">week plannen</button></div>
+    ${planned ? recipeCard(planned) :
+      `<div class="sketch card"><div class="muted" style="font-size:18px">Nog niks gepland. Kies een recept op de Week-tab.</div></div>`}
+    <div class="eyebrow"><span>Onlangs toegevoegd</span><button data-tab="recipes">alle recepten</button></div>
+    ${recent.length ? recent.map(recipeCard).join('') :
+      `<div class="sketch card"><div class="muted" style="font-size:18px">Nog geen recepten.</div></div>`}
+    <button class="btn wide" data-go="new">${ic('plus','')} Recept toevoegen</button>
+  `;
+}
+
+function viewRecipes(){
+  const list = S.filter==='all' ? S.recipes : S.recipes.filter(r=>r.type===S.filter);
+  return `
+    <h1 class="title hand">Recepten</h1>
+    <p class="subtitle">${S.recipes.length} opgeslagen</p>
+    <div class="chips" style="margin-bottom:16px">
+      <button class="chip ${S.filter==='all'?'on':''}" data-filter="all">Alles</button>
+      ${TYPES.map(t=>`<button class="chip ${S.filter===t.id?'on':''}" data-filter="${t.id}">${t.label}</button>`).join('')}
+    </div>
+    ${list.length ? list.map(recipeCard).join('') : `
+      <div class="empty">
+        <div class="draw"><svg viewBox="0 0 200 90">
+          <path d="M30 44 C30 62 52 74 100 74 C148 74 170 62 170 44 Z"/>
+          <path d="M31 45.5 C32 63.5 53 75.5 100 75.5 C147 75.5 169 63 170.5 45.5 Z"/>
+          <path d="M24 43 L177 42.5"/><path d="M25 44.5 L176 44"/>
+        </svg></div>
+        <p>Nog niks hier. Voeg je eerste recept toe, dan staat het op deze plank.</p>
+      </div>`}
+    <button class="btn wide" data-go="new" style="margin-top:6px">${ic('plus','')} Recept toevoegen</button>
+  `;
+}
+
+function viewDetail(id){
+  const r = S.recipes.find(x=>x.id===id);
+  if(!r) return viewRecipes();
+  return `
+    <div class="detail-top">
+      <button class="back" data-tab="recipes" aria-label="Terug">${ic('back','')}</button>
+      <button class="icon-btn" data-go="edit" data-id="${r.id}" aria-label="Recept bewerken">${ic('edit','')}</button>
+    </div>
+    <h1 class="title hand" style="font-size:36px;margin-top:6px">${esc(r.name)}</h1>
+    <p class="subtitle">${typeOf(r.type).label}</p>
+    <div class="sketch card" style="background:var(${typeOf(r.type).v})">
+      <div class="stat-grid">
+        <div class="stat"><div class="k">Tijd</div><div class="v hand">${r.mins}′</div></div>
+        <div class="stat"><div class="k">Personen</div><div class="v hand">${r.serves}</div></div>
+        <div class="stat"><div class="k">Niveau</div><div class="v hand">${LEVEL_NL[r.level]||r.level}</div></div>
+      </div>
+    </div>
+    <div class="eyebrow"><span>Ingrediënten</span><button data-addlist="${r.id}">op lijst</button></div>
+    <div class="sketch card">
+      ${r.ingredients.map(i=>`<div class="step"><span class="n">·</span><span class="tx">${esc(i)}</span></div>`).join('')}
+    </div>
+    <div class="eyebrow"><span>Stappen</span></div>
+    <div class="sketch card">
+      ${r.steps.map((s,i)=>`<div class="step"><span class="n hand">${i+1}</span><span class="tx">${esc(s)}</span></div>`).join('')}
+    </div>
+    <button class="btn fill wide" data-cook="${r.id}" style="margin-top:4px">${ic('flame','')} Begin met koken</button>
+    <button class="btn ghost wide" data-del="${r.id}" style="margin-top:10px">${ic('trash','')} Recept verwijderen</button>
+  `;
+}
+
+function viewEdit(id){
+  const r = id ? S.recipes.find(x=>x.id===id) : null;
+  const d = r || {name:'',type:'dinner',mins:30,serves:2,level:'easy',ingredients:[],steps:[]};
+  return `
+    <div class="detail-top">
+      <button class="back" data-tab="recipes" aria-label="Terug">${ic('back','')}</button>
+      <span class="h hand">${r ? 'Recept bewerken' : 'Nieuw recept'}</span>
+      <span style="width:28px"></span>
+    </div>
+    <div class="field" style="margin-top:14px">
+      <label for="f-name">Naam</label>
+      <input class="inp" id="f-name" value="${esc(d.name)}" placeholder="Pasta pesto">
+    </div>
+    <div class="field">
+      <label>Soort maaltijd</label>
+      <div class="chips" id="f-type">
+        ${TYPES.map(t=>`<button class="chip ${d.type===t.id?'on':''}" data-type="${t.id}">${t.label}</button>`).join('')}
+      </div>
+    </div>
+    <div class="split">
+      <div class="field"><label for="f-mins">Minuten</label><input class="inp" id="f-mins" type="number" inputmode="numeric" value="${d.mins}"></div>
+      <div class="field"><label for="f-serves">Personen</label><input class="inp" id="f-serves" type="number" inputmode="numeric" value="${d.serves}"></div>
+    </div>
+    <div class="field">
+      <label>Niveau</label>
+      <div class="chips" id="f-level">
+        ${LEVELS.map(l=>`<button class="chip ${d.level===l?'on':''}" data-level="${l}">${LEVEL_NL[l]}</button>`).join('')}
+      </div>
+    </div>
+    <div class="field">
+      <label for="f-ing">Ingrediënten — één per regel</label>
+      <textarea class="inp" id="f-ing" rows="6" placeholder="300 g pasta&#10;1 bosje basilicum">${esc(d.ingredients.join('\n'))}</textarea>
+    </div>
+    <div class="field">
+      <label for="f-steps">Stappen — één per regel</label>
+      <textarea class="inp" id="f-steps" rows="7" placeholder="Kook de pasta 9 min.&#10;Roer de pesto erdoor.">${esc(d.steps.join('\n'))}</textarea>
+    </div>
+    <button class="btn fill wide" data-save="${r ? r.id : 'new'}">${ic('check','')} Recept opslaan</button>
+  `;
+}
+
+function viewShopping(){
+  const open = S.shopping.filter(i=>!i.done), done = S.shopping.filter(i=>i.done);
+  return `
+    <h1 class="title hand">Boodschappenlijst</h1>
+    <p class="subtitle">${open.length} te halen</p>
+    <div class="sketch card" data-pantmenu="1" style="cursor:pointer;margin-bottom:14px">
+      <div class="row">
+        <div class="grow"><div class="name hand">Wat heb ik in huis</div><div class="meta">${S.pantry.length} in voorraad · voor 'Wat zullen we koken?'</div></div>
+        <span class="fam-chev ${pantOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
+      </div>
+    </div>
+    ${pantOpen ? `
+    <button class="btn wide" id="pan-photo-btn" style="margin-bottom:8px">${ic('camera','')} Foto maken</button>
+    <input type="file" accept="image/*" id="pan-photo-input" style="display:none">
+    <div class="muted" style="font-size:14px;margin:0 4px 12px;line-height:1.4">Maak een foto van je koelkast of kast — ik herken de ingrediënten. Of typ ze hieronder.</div>
+    <div class="split" style="margin-bottom:14px">
+      <input class="inp" id="pan-in" placeholder="Ingrediënt typen" style="flex:1">
+      <button class="btn fill" id="pan-add" aria-label="Toevoegen">${ic('plus','')}</button>
+    </div>
+    <div class="chips" style="margin-bottom:14px">
+      ${S.pantry.length ? S.pantry.map(p=>`<button class="chip on" data-pan="${esc(p)}">${esc(p)} ×</button>`).join('')
+        : `<span class="muted" style="font-size:17px">Nog niks in voorraad.</span>`}
+    </div>
+    <button class="btn fill wide" data-go="suggest" style="margin-bottom:20px">${ic('spark','')} Wat zullen we koken?</button>` : ''}
+    <div class="split" style="margin-bottom:16px">
+      <input class="inp" id="shop-in" placeholder="Item toevoegen" style="flex:1">
+      <button class="btn fill" id="shop-add" aria-label="Toevoegen">${ic('plus','')}</button>
+    </div>
+    ${!S.shopping.length ? `<div class="empty"><p>Leeg. Voeg hier items toe, of open een recept en tik op "op lijst".</p></div>` : ''}
+    ${open.map(i=>`<div class="sketch soft list-item">
+        <button class="tickbox" data-tick="${i.id}" aria-label="Afvinken">${ic('check','')}</button>
+        <span class="grow">${esc(i.text)}</span>
+        <button class="icon-btn" data-rm="${i.id}" aria-label="Verwijderen">${ic('trash','')}</button>
+      </div>`).join('')}
+    ${done.length ? `<div class="eyebrow"><span>In het mandje</span><button id="shop-clear">leeg</button></div>` : ''}
+    ${done.map(i=>`<div class="sketch soft list-item">
+        <button class="tickbox on" data-tick="${i.id}" aria-label="Vinkje weg">${ic('check','')}</button>
+        <span class="grow done">${esc(i.text)}</span>
+      </div>`).join('')}
+  `;
+}
+
+function viewPlan(){
+  return `
+    <h1 class="title hand">Deze week</h1>
+    <p class="subtitle">Tik op een dag om de maaltijd te kiezen.</p>
+    ${DAYS.map(d=>{
+      const r = S.plan[d] ? S.recipes.find(x=>x.id===S.plan[d]) : null;
+      return `<div class="sketch card" ${r?`style="background:var(${typeOf(r.type).v})"`:''}>
+        <div class="row">
+          <span class="hand" style="font-size:22px;width:52px">${d}</span>
+          <select class="inp grow" data-day="${d}" style="font-size:18px;padding:9px 12px">
+            <option value="">— nog niks —</option>
+            ${S.recipes.map(x=>`<option value="${x.id}" ${S.plan[d]===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}
+          </select>
+        </div>
+      </div>`;
+    }).join('')}
+    <button class="btn wide" id="plan-shop" style="margin-top:6px">${ic('cart','')} Week naar boodschappenlijst</button>
+  `;
+}
+
+function viewProfile(){
+  return `
+    <h1 class="title hand">Jouw keuken</h1>
+    <p class="subtitle">Wat er in huis is, en hoe alles eruitziet.</p>
+    <div class="sketch card" data-fam="toggle" style="cursor:pointer;margin-bottom:14px">
+      <div class="row">
+        <div class="grow">
+          <div class="name hand">Gezinsleden</div>
+          <div class="meta">${S.family.length} ${S.family.length===1?'lid':'leden'} · telt mee bij recepten</div>
+        </div>
+        <span class="fam-chev ${famOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
+      </div>
+    </div>
+    ${famOpen ? `
+    ${S.family.length ? S.family.map(familyCard).join('')
+      : `<div class="sketch card"><div class="muted" style="font-size:17px">Nog geen gezinsleden. Voeg ze toe zodat recepten rekening houden met wie mee-eet.</div></div>`}
+    <button class="btn wide" data-memberedit="new" style="margin-bottom:14px">${ic('plus','')} Gezinslid toevoegen</button>
+    <div class="sketch soft card" style="margin-bottom:20px">
+      <div class="muted" style="font-size:15px;line-height:1.45">Wie ‘eet mee’ aangevinkt heeft, telt mee bij <span class="hand">Wat kan ik koken?</span>. ${NUTRI_DISCLAIMER}</div>
+    </div>` : ''}
+    <div class="sketch card" data-prefmenu="1" style="cursor:pointer;margin-bottom:14px">
+      <div class="row">
+        <div class="grow"><div class="name hand">Voorkeuren</div><div class="meta">Richtlijnen voor de AI</div></div>
+        <span class="fam-chev ${prefOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
+      </div>
+    </div>
+    ${prefOpen ? `
+    <div class="sketch card" style="margin-bottom:14px">
+      <div class="pref-row"><span>Groenten</span><input type="range" min="0" max="7" value="${S.prefs.veg}" data-slider="veg"><span class="pref-val hand" id="val-veg">${S.prefs.veg}×</span></div>
+      <div class="pref-row"><span>Vis</span><input type="range" min="0" max="7" value="${S.prefs.fish}" data-slider="fish"><span class="pref-val hand" id="val-fish">${S.prefs.fish}×</span></div>
+      <div class="pref-row" style="margin-bottom:6px"><span>Vlees</span><input type="range" min="0" max="7" value="${S.prefs.meat}" data-slider="meat"><span class="pref-val hand" id="val-meat">${S.prefs.meat}×</span></div>
+      <div class="muted" style="font-size:14px">Aantal dagen per week</div>
+    </div>
+    <div class="eyebrow"><span>Wat is belangrijk?</span></div>
+    <div class="chips" style="margin-bottom:20px">
+      ${PREF_FLAGS.map(f=>`<button class="chip ${(S.prefs.flags||[]).includes(f.id)?'on':''}" data-prefflag="${f.id}">${f.label}</button>`).join('')}
+    </div>` : ''}
+    <div class="sketch card" data-equipmenu="1" style="cursor:pointer;margin-bottom:14px">
+      <div class="row">
+        <div class="grow"><div class="name hand">Keukenapparatuur</div><div class="meta">${(S.equip||[]).length} geselecteerd · richtlijn voor de AI</div></div>
+        <span class="fam-chev ${equipOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
+      </div>
+    </div>
+    ${equipOpen ? `
+    <div class="chips" style="margin-bottom:20px">
+      ${EQUIPMENT.map(e=>`<button class="chip ${(S.equip||[]).includes(e.id)?'on':''}" data-equip="${e.id}">${e.label}</button>`).join('')}
+    </div>` : ''}
+    <div class="eyebrow"><span>AI-sleutel</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 10px;line-height:1.4">Plak je Anthropic API-sleutel zodat 'Wat zullen we koken?' en de voorraad-foto werken. Blijft alleen op dit apparaat.</div>
+    <div class="split" style="margin-bottom:20px">
+      <input class="inp" id="ai-key" type="password" placeholder="sk-ant-..." value="${esc(aiKey())}" style="flex:1">
+      <button class="btn fill" id="ai-save" aria-label="Sleutel opslaan">${ic('check','')}</button>
+    </div>
+    <div class="eyebrow"><span>Weergave</span></div>
+    <div class="chips" style="margin-bottom:20px">
+      ${[['auto','Auto'],['light','Daglicht'],['dark','Schoolbord']].map(([v,l])=>
+        `<button class="chip ${S.theme===v?'on':''}" data-theme="${v}">${l}</button>`).join('')}
+    </div>
+    <div class="sketch card">
+      <div class="muted" style="font-size:17px;line-height:1.45">
+        ${S.recipes.length} recepten · ${S.pantry.length} in voorraad · ${S.shopping.length} op de lijst.
+        Alles blijft op dit apparaat.
+      </div>
+    </div>
+  `;
+}
+
+function familyCard(m){
+  const R = memberRules(m);
+  const tags = (m.stages||[]).filter(x=>x!=='none').map(stageLabel);
+  const n = R.avoid.length + R.limit.length;
+  return `<div class="sketch card" style="${m.eat?'':'opacity:.55'}">
+    <div class="row">
+      <button class="tickbox ${m.eat?'on':''}" data-eat="${m.id}" aria-label="Eet mee">${ic('check','')}</button>
+      <div class="grow" data-member="${m.id}" style="cursor:pointer">
+        <div class="name hand">${esc(m.name)}</div>
+        <div class="meta">${tags.length?esc(tags.join(' · ')):'Geen bijzonderheden'}${n?` · ${n} regels`:''}</div>
+      </div>
+      <button class="icon-btn" data-memberedit="${m.id}" aria-label="Bewerken">${ic('edit','')}</button>
+    </div>
+  </div>`;
+}
+
+function viewMember(id){
+  const m = S.family.find(x=>x.id===id);
+  if(!m) return viewProfile();
+  const R = memberRules(m);
+  const sect = (title, items) => items.length ? `
+    <div class="eyebrow"><span>${title}</span></div>
+    <div class="sketch card">
+      ${items.map(x=>`<div class="step"><span class="n">·</span><span class="tx">${esc(x)}</span></div>`).join('')}
+    </div>` : '';
+  const tags = (m.stages||[]).map(stageLabel).join(' · ') || 'Geen bijzonderheden';
+  const empty = !R.avoid.length && !R.limit.length && !R.ok.length && !R.notes.length;
+  return `
+    <div class="detail-top">
+      <button class="back" data-tab="profile" aria-label="Terug">${ic('back','')}</button>
+      <button class="icon-btn" data-memberedit="${m.id}" aria-label="Gezinslid bewerken">${ic('edit','')}</button>
+    </div>
+    <h1 class="title hand" style="font-size:36px;margin-top:6px">${esc(m.name)}</h1>
+    <p class="subtitle">${esc(tags)}${m.note?` — ${esc(m.note)}`:''}${m.eat?'':' · eet niet mee'}</p>
+    ${sect('Niet eten', R.avoid)}
+    ${sect('Beperken', R.limit)}
+    ${sect('Let op / mag wel', R.ok)}
+    ${R.notes.map(x=>`<div class="sketch card"><div class="muted" style="font-size:16px;line-height:1.45">${esc(x)}</div></div>`).join('')}
+    ${empty?`<div class="sketch card"><div class="muted" style="font-size:17px">Geen bijzondere voedingsregels.</div></div>`:''}
+    ${R.srcs.length?`<p class="muted" style="font-size:15px;margin:6px 4px 10px">Bron: ${esc(R.srcs.join(' · '))}</p>`:''}
+    <div class="sketch soft card">
+      <div class="muted" style="font-size:15px;line-height:1.45">${NUTRI_DISCLAIMER}</div>
+    </div>
+  `;
+}
+
+function viewMemberEdit(id){
+  const m = id!=='new' ? S.family.find(x=>x.id===id) : null;
+  const d = m || {name:'', stages:[], eat:true, note:''};
+  return `
+    <div class="detail-top">
+      <button class="back" data-tab="profile" aria-label="Terug">${ic('back','')}</button>
+      <span class="h hand">${m?'Gezinslid bewerken':'Nieuw gezinslid'}</span>
+      <span style="width:28px"></span>
+    </div>
+    <div class="field" style="margin-top:14px">
+      <label for="m-name">Naam</label>
+      <input class="inp" id="m-name" value="${esc(d.name)}" placeholder="Naam">
+    </div>
+    <div class="field">
+      <label>Situatie — meerdere mogelijk</label>
+      <div class="chips" id="m-stages">
+        ${STAGES.map(st=>`<button class="chip ${d.stages.includes(st.id)?'on':''}" data-stage="${st.id}">${st.label}</button>`).join('')}
+      </div>
+    </div>
+    <div class="field">
+      <label for="m-note">Notitie (optioneel)</label>
+      <input class="inp" id="m-note" value="${esc(d.note||'')}" placeholder="bijv. leeftijd of allergie">
+    </div>
+    <div class="sketch soft list-item" style="margin-bottom:16px">
+      <button class="tickbox ${d.eat?'on':''}" id="m-eat" aria-label="Eet mee">${ic('check','')}</button>
+      <span class="grow">Eet mee — telt mee bij recepten zoeken</span>
+    </div>
+    <button class="btn fill wide" data-savemember="${m?m.id:'new'}">${ic('check','')} Gezinslid opslaan</button>
+    ${m?`<button class="btn ghost wide" data-memberdel="${m.id}" style="margin-top:10px">${ic('trash','')} Gezinslid verwijderen</button>`:''}
+  `;
+}
+
+/* voedingsregels van alle mee-eters, samengevoegd, voor de AI-prompt */
+function familyPrompt(members){
+  const fam = members || (S.family||[]).filter(m=>m.eat);
+  if(!fam.length) return '';
+  const avoid=[], limit=[];
+  fam.forEach(m=>{ const R=memberRules(m);
+    R.avoid.forEach(x=>{ if(!avoid.includes(x)) avoid.push(x); });
+    R.limit.forEach(x=>{ if(!limit.includes(x)) limit.push(x); }); });
+  const who = fam.map(m=>{ const st=(m.stages||[]).filter(x=>x!=='none').map(stageLabel);
+    return `${m.name}${st.length?` (${st.join(', ')})`:''}`; }).join('; ');
+  if(!avoid.length && !limit.length) return `\nWie eet mee: ${who}.`;
+  return `
+Houd je STRIKT aan deze voedingsregels. Ze volgen de richtlijnen van gerenommeerde instituties (Voedingscentrum, RIVM, WHO). Kies of pas het gerecht zo aan dat het veilig is voor iedereen die mee-eet. Verzin geen regels buiten deze lijst.
+Wie eet mee: ${who}.
+NIET gebruiken: ${avoid.join('; ')||'—'}.
+BEPERKEN: ${limit.join('; ')||'—'}.
+Bevat een klassiek recept iets wat niet mag, geef dan een veilig alternatief in het recept zelf.`;
+}
+
+function equipPrompt(){
+  const on = EQUIPMENT.filter(e=>(S.equip||[]).includes(e.id)).map(e=>e.label);
+  if(!on.length) return '';
+  return `Beschikbare keukenapparatuur: ${on.join(', ')}. Ga uit van alleen deze apparatuur; stel geen stappen voor die andere toestellen vereisen.\n`;
+}
+function prefsPrompt(flags){
+  flags = flags || [];
+  const p = S.prefs || {};
+  const freq = `Weekdoel (verdeel over de week, geen harde eis): groente ~${p.veg??0} van 7 dagen, vis ~${p.fish??0} van 7, vlees ~${p.meat??0} van 7 — kies een gerecht dat hierbij past.`;
+  const hints = flags.map(id=>{ const f=PREF_FLAGS.find(x=>x.id===id); return f?f.hint:null; }).filter(Boolean);
+  let extra = hints.length ? ` Let op deze voorkeuren: ${hints.join('; ')}.` : '';
+  if(flags.includes('weer')){
+    const maand = ['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'][new Date().getMonth()];
+    extra += ` Het is nu ${maand}; kies iets dat bij dit seizoen past.`;
+  }
+  return `${freq}${extra}\n`;
+}
+
+function openAsk(){
+  ask = { meal:'dinner', who:(S.family||[]).filter(m=>m.eat).map(m=>m.id), prefs:[...((S.prefs&&S.prefs.flags)||[])] };
+  $('ask').classList.add('on'); renderAsk();
+}
+function closeAsk(){ $('ask').classList.remove('on'); }
+function renderAsk(){
+  const MEALS = [['breakfast','Ontbijt'],['lunch','Lunch'],['lunchtogo','Lunch to go'],['dinner','Diner']];
+  $('ask').querySelector('.sheet-card').innerHTML = `
+    <div class="cook-head" style="margin-bottom:10px">
+      <span class="h hand" style="font-size:27px">Wat zullen we koken?</span>
+      <button class="back" id="askClose" aria-label="Sluiten"><svg viewBox="0 0 24 24"><path d="M18.4 5.4 5.7 18.3M5.5 5.6l12.9 12.7"/></svg></button>
+    </div>
+    <div class="field"><label>Maaltijd</label>
+      <div class="chips">${MEALS.map(([id,l])=>`<button class="chip ${ask.meal===id?'on':''}" data-ask-meal="${id}">${l}</button>`).join('')}</div>
+    </div>
+    <div class="field"><label>Wie eet mee</label>
+      <div class="chips">${(S.family||[]).length ? S.family.map(m=>`<button class="chip ${ask.who.includes(m.id)?'on':''}" data-ask-who="${m.id}">${esc(m.name)}</button>`).join('') : `<span class="muted" style="font-size:16px">Nog geen gezinsleden</span>`}</div>
+    </div>
+    <div class="field"><label>Voorkeur</label>
+      <div class="chips">${PREF_FLAGS.map(f=>`<button class="chip ${ask.prefs.includes(f.id)?'on':''}" data-ask-pref="${f.id}">${f.label}</button>`).join('')}</div>
+    </div>
+    <button class="btn fill wide" id="askGo">${ic('spark','')} Bedenk recept</button>
+  `;
+}
+
+function fileToB64(file){
+  return new Promise((res,rej)=>{
+    const r = new FileReader();
+    r.onload = () => { const m = /data:(.*?);base64,(.*)$/.exec(r.result); if(m) res({media_type:m[1], data:m[2]}); else rej(new Error('bad')); };
+    r.onerror = rej; r.readAsDataURL(file);
+  });
+}
+async function scanPantry(file){
+  toast('Foto wordt bekeken…');
+  let img;
+  try{ img = await fileToB64(file); }catch(e){ toast('Kon de foto niet lezen'); return; }
+  try{
+    const res = await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST', headers: aiHeaders(),
+      body: JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:600, messages:[{role:'user', content:[
+        {type:'image', source:{type:'base64', media_type:img.media_type, data:img.data}},
+        {type:'text', text:'Dit is een foto van eten of voorraad. Noem de herkenbare, eetbare ingrediënten die je ziet. Antwoord met UITSLUITEND een JSON-array van korte Nederlandse namen, enkelvoud en kleine letters, geen merken of verpakkingen. Voorbeeld: ["ei","tomaat","kaas"].'}
+      ]}] })
+    });
+    const data = await res.json();
+    const txt = data.content.map(c=>c.type==='text'?c.text:'').join('').replace(/```json|```/g,'').trim();
+    const items = JSON.parse(txt);
+    let added = 0;
+    items.forEach(x=>{ const v = String(x).trim().toLowerCase(); if(v && !S.pantry.includes(v)){ S.pantry.push(v); added++; } });
+    await persist(); render();
+    toast(added ? `${added} toegevoegd uit de foto` : 'Niks nieuws gevonden');
+  }catch(e){
+    toast('Foto bekijken lukte niet. Probeer typen.');
+  }
+}
+
+function viewPicks(){
+  return `
+    <div class="detail-top">
+      <button class="back" data-tab="home" aria-label="Terug">${ic('back','')}</button>
+      <span class="h hand">Kies een recept</span>
+      <span style="width:28px"></span>
+    </div>
+    <p class="subtitle" style="margin-top:6px">${suggestions.length} ${suggestions.length===1?'idee':'ideeën'} op basis van je keuzes. Tik om te bekijken.</p>
+    ${suggestions.map(candidateCard).join('')}
+    <button class="btn ghost wide" data-go="suggest" style="margin-top:6px">${ic('spark','')} Nog eens proberen</button>
+  `;
+}
+function candidateCard(c){
+  return `<div class="sketch card" style="background:var(${typeOf(c.type).v})">
+    <div class="row">
+      <div class="grow" data-cand="${c.id}" style="cursor:pointer">
+        <div class="name hand">${esc(c.name)}</div>
+        <div class="meta">${c.mins} min · ${c.serves} pers. · ${LEVEL_NL[c.level]||c.level}</div>
+      </div>
+      <button class="icon-btn" data-savecand="${c.id}" aria-label="Bewaren">${ic('save','')}</button>
+    </div>
+  </div>`;
+}
+function viewCandidate(id){
+  const c = suggestions.find(x=>x.id===id);
+  if(!c) return viewPicks();
+  return `
+    <div class="detail-top">
+      <button class="back" data-go="picks" aria-label="Terug">${ic('back','')}</button>
+      <button class="icon-btn" data-savecand="${c.id}" aria-label="Bewaren">${ic('save','')}</button>
+    </div>
+    <h1 class="title hand" style="font-size:34px;margin-top:6px">${esc(c.name)}</h1>
+    <p class="subtitle">${typeOf(c.type).label} · idee — nog niet bewaard</p>
+    <div class="sketch card" style="background:var(${typeOf(c.type).v})">
+      <div class="stat-grid">
+        <div class="stat"><div class="k">Tijd</div><div class="v hand">${c.mins}′</div></div>
+        <div class="stat"><div class="k">Personen</div><div class="v hand">${c.serves}</div></div>
+        <div class="stat"><div class="k">Niveau</div><div class="v hand">${LEVEL_NL[c.level]||c.level}</div></div>
+      </div>
+    </div>
+    <div class="eyebrow"><span>Ingrediënten</span></div>
+    <div class="sketch card">
+      ${(c.ingredients||[]).map(i=>`<div class="step"><span class="n">·</span><span class="tx">${esc(i)}</span></div>`).join('')}
+    </div>
+    <div class="eyebrow"><span>Stappen</span></div>
+    <div class="sketch card">
+      ${(c.steps||[]).map((st,i)=>`<div class="step"><span class="n hand">${i+1}</span><span class="tx">${esc(st)}</span></div>`).join('')}
+    </div>
+    <button class="btn ghost wide" data-savecand="${c.id}" style="margin-top:4px">${ic('save','')} Bewaren in mijn recepten</button>
+  `;
+}
+function saveCandidate(id){
+  const c = suggestions.find(x=>x.id===id);
+  if(!c) return null;
+  const rec = { id:uid(), name:c.name, type:c.type||'dinner', mins:+c.mins||0, serves:+c.serves||2, level:c.level||'easy', ingredients:c.ingredients||[], steps:c.steps||[] };
+  S.recipes.push(rec);
+  return rec;
+}
+
+/* ---------------- suggestion ---------------- */
+async function suggest(opts){
+  opts = opts || { meal:'dinner', who:(S.family||[]).filter(m=>m.eat).map(m=>m.id), prefs:(S.prefs&&S.prefs.flags)||[] };
+  const mealLabel = {breakfast:'ontbijt', lunch:'lunch', lunchtogo:'lunch om mee te nemen naar werk', dinner:'avondmaaltijd'}[opts.meal] || 'maaltijd';
+  const mealNote = opts.meal==='lunchtogo' ? ' Het is een lunch om mee te nemen naar werk: thuis vooraf klaar te maken, lekt niet, blijft lekker koud of is makkelijk op te warmen, en past in een lunchbox of meeneembakje.' : '';
+  const members = (S.family||[]).filter(m=>opts.who.includes(m.id));
+  const serves = members.length || 2;
+  $('screen').innerHTML = `<h1 class="title hand">Even denken…</h1>
+    <p class="subtitle">Ik stel een paar ideeën samen op basis van je voorkeuren.</p>${PAN_DRAWING}`;
+  const prompt = `Bedenk één ${mealLabel}. In huis: ${S.pantry.length ? S.pantry.join(', ') : 'een gewone basisvoorraad'}.
+Maximaal 45 minuten, tenzij anders gevraagd. Schrijf in het Nederlands, tutoyeren.${mealNote}
+${equipPrompt()}${prefsPrompt(opts.prefs)}${familyPrompt(members)}
+Bedenk 1 tot 3 verschillende recepten waaruit ik kan kiezen.
+Antwoord met UITSLUITEND geldige JSON, geen markdown: een array van 1 tot 3 recepten:
+[{"name":"","type":"${opts.meal}","mins":25,"serves":${serves},"level":"easy","ingredients":["..."],"steps":["..."]}]`;
+  try{
+    const res = await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST', headers: aiHeaders(),
+      body: JSON.stringify({model:'claude-sonnet-4-6', max_tokens:1000, messages:[{role:'user',content:prompt}]})
+    });
+    const data = await res.json();
+    const txt = data.content.map(c=>c.type==='text'?c.text:'').join('').replace(/```json|```/g,'').trim();
+    let arr = JSON.parse(txt);
+    if(!Array.isArray(arr)) arr = [arr];
+    suggestions = arr.slice(0,3).map(r=>({ ...r, id:'c'+uid() }));
+    go('recipes','picks');
+  }catch(e){
+    $('screen').innerHTML = `<h1 class="title hand">Niet gelukt</h1>
+      <p class="subtitle">De suggestie kwam niet door. Probeer het zo nog eens.</p>
+      <button class="btn wide" data-tab="home">Terug naar start</button>`;
+  }
+}
+
+/* ---------------- cook mode ---------------- */
+let cook = {steps:[], i:0, recipeId:null};
+let timerTick = null;
+
+function openCook(id){
+  const r = S.recipes.find(x=>x.id===id); if(!r) return;
+  cook.steps = r.steps; cook.i = 0; cook.recipeId = id;
+  $('cook').classList.add('on'); renderTimers(); drawStep();
+}
+function closeCook(){ $('cook').classList.remove('on'); renderTimers(); }
+
+function drawStep(){
+  const s = cook.steps[cook.i] || '';
+  $('cookCount').textContent = `Stap ${cook.i+1} van ${cook.steps.length}`;
+  $('cookStep').innerHTML = `<div class="cook-n">${cook.i+1}</div><div class="cook-tx">${esc(s)}</div>`;
+  $('cookPrev').disabled = cook.i === 0;
+  $('cookNext').textContent = cook.i === cook.steps.length-1 ? 'Klaar' : 'Volgende';
+  const m = s.match(/(\d+)\s*(min|minuten|minuut)/i);
+  if(m && !S.timers.some(t=>t.stepIdx===cook.i && t.recipeId===cook.recipeId && !t.done)){
+    const min = parseInt(m[1],10), label = labelFromStep(s, m.index);
+    $('cookTimerAdd').innerHTML = `<button class="btn ghost cook-add-t" data-addtimer="${min}" data-tlabel="${esc(label)}">${ic('flame','')} Zet timer · ${min} min · ${esc(label)}</button>`;
+  } else {
+    $('cookTimerAdd').innerHTML = '';
+  }
+  const nx = cook.steps[cook.i+1];
+  if(nx){ $('cookPeek').style.display='block'; $('cookPeek').innerHTML = `<div class="lbl">Straks · stap ${cook.i+2}</div><div class="ptx">${esc(nx)}</div>`; }
+  else { $('cookPeek').style.display='none'; }
+}
+
+/* een woord uit de staptekst als klein label — werkwoorden en stopwoorden overslaan */
+const TIMER_STOP = new Set(['de','het','een','en','met','op','in','tot','voor','van','aan','over','onder','door','bij','naar','uit','om','af','dan','nog','ca','ong','circa','ongeveer','minstens','tegen',
+  'kook','bak','roer','snijd','snij','meng','voeg','laat','zet','breng','verwarm','gril','grill','stoof','rooster','klop','giet','schep','prak','pureer','marineer','kruid','bestrooi','beleg','vul','rol','week','spoel','doe','maak','warm','bereid','pocheer','sudder','blancheer','fruit','wok','stoom','bind','proef','pers','was','dep','snipper','hak','rasp','schil','laten','bakken','koken','gaar','beetgaar']);
+function labelFromStep(txt, at){
+  const clean = w => w.toLowerCase().replace(/[.,;:!?()]/g,'');
+  const ok = w => w && !/^\d+$/.test(w) && !/^(min|minuten|minuut|sec|seconden|uur)$/.test(w) && !TIMER_STOP.has(w) && w.length >= 3;
+  txt = String(txt); if(at == null) at = txt.length;
+  const before = txt.slice(0, at).split(/\s+/).map(clean).filter(Boolean);
+  for(let i = before.length-1; i >= 0; i--){ if(ok(before[i])) return before[i]; }
+  const after = txt.slice(at).split(/\s+/).map(clean).filter(Boolean);
+  for(const w of after){ if(ok(w)) return w; }
+  return 'timer';
+}
+
+function fmtTime(sec){
+  return `${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`;
+}
+/* resterende seconden — bij een lopende timer uit de eindtijd (kloptijd), zodat
+   achtergrond/telefoon-op-slot de tijd niet laat verlopen */
+function timerRemaining(t){
+  if(t.done) return 0;
+  if(t.running && t.endAt) return Math.max(0, Math.round((t.endAt - Date.now())/1000));
+  return t.left || 0;
+}
+function askNotifyPermission(){
+  try{ if(window.Notification && Notification.permission === 'default') Notification.requestPermission(); }catch(e){}
+}
+function notify(msg){
+  try{ if(window.Notification && Notification.permission === 'granted') new Notification('Panklaar', {body:msg}); }catch(e){}
+}
+/* bij terugkeer in de app: timers die tijdens afwezigheid afliepen alsnog afronden */
+function catchUpTimers(){
+  let changed = false;
+  (S.timers||[]).forEach(t=>{
+    if(t.running && !t.done && timerRemaining(t) <= 0){
+      t.left = 0; t.running = false; t.done = true; t.endAt = null;
+      beep(); toast(`Klaar: ${t.label}`); notify(`Timer klaar: ${t.label}`); changed = true;
+    }
+  });
+  renderTimers();
+  if(changed) persist();
+  if((S.timers||[]).some(t=>t.running && !t.done)) ensureTick();
+}
+function renderTimers(){
+  const list = S.timers || [];
+  const html = !list.length ? '' : list.map(t=>{
+    const state = t.done ? 'done' : (t.running ? '' : 'paused');
+    const time = t.done ? 'Klaar' : fmtTime(timerRemaining(t));
+    const sub = (!t.running && !t.done) ? ' · pauze' : '';
+    return `<div class="tchip ${state}">
+      <button class="tchip-x" data-tdismiss="${t.id}" aria-label="Timer weg">×</button>
+      <div class="tchip-time hand" data-ttoggle="${t.id}">${time}</div>
+      <div class="tchip-lbl">${esc(t.label)}${sub}</div>
+    </div>`;
+  }).join('');
+  const cookOpen = $('cook').classList.contains('on');
+  const cb = $('cookTimers'); if(cb){ cb.innerHTML = html; cb.style.display = (list.length && cookOpen) ? 'flex' : 'none'; }
+  const tb = $('timerbar'); if(tb){ tb.innerHTML = html; tb.style.display = (list.length && !cookOpen) ? 'flex' : 'none'; }
+}
+function ensureTick(){
+  if(timerTick) return;
+  timerTick = setInterval(()=>{
+    let changed = false;
+    (S.timers||[]).forEach(t=>{
+      if(t.running && !t.done && timerRemaining(t) <= 0){
+        t.left = 0; t.running = false; t.done = true; t.endAt = null;
+        beep(); toast(`Klaar: ${t.label}`); notify(`Timer klaar: ${t.label}`); changed = true;
+      }
+    });
+    renderTimers();
+    if(changed) persist();
+    if(!(S.timers||[]).some(t=>t.running && !t.done)){ clearInterval(timerTick); timerTick = null; }
+  },1000);
+}
+function addStepTimer(min, label, stepIdx){
+  askNotifyPermission();
+  S.timers.push({id:uid(), label, left:min*60, endAt:Date.now()+min*60*1000, running:true, done:false, recipeId:cook.recipeId, stepIdx});
+  ensureTick(); renderTimers(); persist();
+}
+function toggleTimerById(id){
+  const t = (S.timers||[]).find(x=>x.id===id); if(!t || t.done) return;
+  if(t.running){ t.left = timerRemaining(t); t.running = false; t.endAt = null; }
+  else { t.running = true; t.endAt = Date.now() + (t.left||0)*1000; ensureTick(); }
+  renderTimers(); persist();
+}
+function dismissTimer(id){
+  S.timers = (S.timers||[]).filter(x=>x.id!==id);
+  renderTimers(); persist();
+  if($('cook').classList.contains('on')) drawStep();
+}
+function beep(){
+  try{
+    const a = new (window.AudioContext||window.webkitAudioContext)();
+    const o = a.createOscillator(), g = a.createGain();
+    o.connect(g); g.connect(a.destination); o.frequency.value = 660; o.type='triangle';
+    g.gain.setValueAtTime(.001,a.currentTime); g.gain.exponentialRampToValueAtTime(.25,a.currentTime+.02);
+    g.gain.exponentialRampToValueAtTime(.001,a.currentTime+1.1);
+    o.start(); o.stop(a.currentTime+1.2);
+  }catch(e){}
+}
+
+/* ---------------- actions ---------------- */
+function pack(){ return {recipes:S.recipes, shopping:S.shopping, pantry:S.pantry, plan:S.plan, theme:S.theme, family:S.family, equip:S.equip, prefs:S.prefs, timers:S.timers}; }
+async function persist(){ await saveData(pack()); }
+
+function addToList(items){
+  items.forEach(t=>{
+    const clean = t.trim(); if(!clean) return;
+    if(S.shopping.some(i=>i.text.toLowerCase()===clean.toLowerCase())) return;
+    S.shopping.push({id:uid(), text:clean, done:false});
+  });
+  persist();
+}
+
+function applyTheme(){
+  if(S.theme==='auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', S.theme);
+}
+
+document.addEventListener('click', async (e)=>{
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#pan-add,#pan-photo-btn,#ai-save,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand]');
+  if(!t) return;
+
+  if(t.dataset.tab){ go(t.dataset.tab); return; }
+  if(t.dataset.open){ go('recipes','detail',t.dataset.open); return; }
+  if(t.dataset.go === 'new'){ go('recipes','edit',null); return; }
+  if(t.dataset.go === 'edit'){ go('recipes','edit',t.dataset.id); return; }
+  if(t.dataset.go === 'suggest'){ openAsk(); return; }
+  if(t.dataset.go === 'picks'){ go('recipes','picks'); return; }
+  if(t.dataset.filter){ S.filter = t.dataset.filter; render(); return; }
+
+  if(t.dataset.type){ document.querySelectorAll('#f-type .chip').forEach(c=>c.classList.toggle('on', c===t)); return; }
+  if(t.dataset.level){ document.querySelectorAll('#f-level .chip').forEach(c=>c.classList.toggle('on', c===t)); return; }
+
+  if(t.dataset.save){
+    const name = $('f-name').value.trim();
+    if(!name){ toast('Geef het recept eerst een naam'); return; }
+    const rec = {
+      id: t.dataset.save === 'new' ? uid() : t.dataset.save,
+      name,
+      type: (document.querySelector('#f-type .chip.on')||{}).dataset?.type || 'dinner',
+      mins: parseInt($('f-mins').value,10) || 0,
+      serves: parseInt($('f-serves').value,10) || 1,
+      level: (document.querySelector('#f-level .chip.on')||{}).dataset?.level || 'easy',
+      ingredients: $('f-ing').value.split('\n').map(s=>s.trim()).filter(Boolean),
+      steps: $('f-steps').value.split('\n').map(s=>s.trim()).filter(Boolean)
+    };
+    const i = S.recipes.findIndex(r=>r.id===rec.id);
+    if(i>=0) S.recipes[i] = rec; else S.recipes.push(rec);
+    await persist(); go('recipes','detail',rec.id); toast('Recept opgeslagen');
+    return;
+  }
+
+  if(t.dataset.cook){ openCook(t.dataset.cook); return; }
+  if(t.dataset.del){
+    const r = S.recipes.find(x=>x.id===t.dataset.del);
+    S.recipes = S.recipes.filter(x=>x.id!==t.dataset.del);
+    Object.keys(S.plan).forEach(d=>{ if(S.plan[d]===t.dataset.del) delete S.plan[d]; });
+    await persist(); go('recipes'); toast(`${r?r.name:'Recept'} verwijderd`);
+    return;
+  }
+  if(t.dataset.addlist){
+    const r = S.recipes.find(x=>x.id===t.dataset.addlist);
+    addToList(r.ingredients); toast('Toegevoegd aan je lijst'); return;
+  }
+
+  if(t.dataset.tick){
+    const i = S.shopping.find(x=>x.id===t.dataset.tick); i.done = !i.done;
+    await persist(); render(); return;
+  }
+  if(t.dataset.rm){ S.shopping = S.shopping.filter(x=>x.id!==t.dataset.rm); await persist(); render(); return; }
+  if(t.id === 'shop-add'){
+    const v = $('shop-in').value; if(!v.trim()) return;
+    addToList([v]); render(); return;
+  }
+  if(t.id === 'shop-clear'){ S.shopping = S.shopping.filter(i=>!i.done); await persist(); render(); return; }
+
+  if(t.id === 'plan-shop'){
+    const all = [];
+    Object.values(S.plan).forEach(id=>{
+      const r = S.recipes.find(x=>x.id===id); if(r) all.push(...r.ingredients);
+    });
+    if(!all.length){ toast('Nog niks gepland'); return; }
+    addToList(all); toast('Week op je lijst gezet'); return;
+  }
+
+  if(t.dataset.pan){ S.pantry = S.pantry.filter(p=>p!==t.dataset.pan); await persist(); render(); return; }
+  if(t.id === 'pan-photo-btn'){ $('pan-photo-input').click(); return; }
+  if(t.id === 'pan-add'){
+    const v = $('pan-in').value.trim().toLowerCase();
+    if(v && !S.pantry.includes(v)) S.pantry.push(v);
+    await persist(); render(); return;
+  }
+  if(t.dataset.theme){ S.theme = t.dataset.theme; applyTheme(); await persist(); render(); return; }
+  if(t.id === 'ai-save'){ try{ localStorage.setItem('panklaar_ai_key', $('ai-key').value.trim()); }catch(e){} toast('AI-sleutel opgeslagen'); return; }
+
+  if(t.dataset.fam === 'toggle'){ famOpen = !famOpen; render(); return; }
+  if(t.dataset.prefmenu){ prefOpen = !prefOpen; render(); return; }
+  if(t.dataset.equipmenu){ equipOpen = !equipOpen; render(); return; }
+  if(t.dataset.pantmenu){ pantOpen = !pantOpen; render(); return; }
+  if(t.dataset.cand){ go('recipes','cand',t.dataset.cand); return; }
+  if(t.dataset.savecand){
+    const rec = saveCandidate(t.dataset.savecand);
+    if(rec){ await persist(); go('recipes','detail',rec.id); toast('Recept bewaard'); }
+    return;
+  }
+  if(t.dataset.equip){
+    const id = t.dataset.equip;
+    S.equip = (S.equip||[]).includes(id) ? S.equip.filter(x=>x!==id) : [...(S.equip||[]), id];
+    await persist(); render(); return;
+  }
+  if(t.dataset.prefflag){
+    const id = t.dataset.prefflag; const cur = S.prefs.flags||[];
+    S.prefs.flags = cur.includes(id) ? cur.filter(x=>x!==id) : [...cur, id];
+    await persist(); render(); return;
+  }
+  if(t.id === 'askClose'){ closeAsk(); return; }
+  if(t.id === 'askGo'){ const o = ask; closeAsk(); suggest(o); return; }
+  if(t.dataset.askMeal){ ask.meal = t.dataset.askMeal; renderAsk(); return; }
+  if(t.dataset.askWho){ const id = t.dataset.askWho; ask.who = ask.who.includes(id) ? ask.who.filter(x=>x!==id) : [...ask.who, id]; renderAsk(); return; }
+  if(t.dataset.askPref){ const id = t.dataset.askPref; ask.prefs = ask.prefs.includes(id) ? ask.prefs.filter(x=>x!==id) : [...ask.prefs, id]; renderAsk(); return; }
+  if(t.dataset.member){ go('profile','member',t.dataset.member); return; }
+  if(t.dataset.memberedit){ go('profile','memberEdit',t.dataset.memberedit); return; }
+  if(t.dataset.eat){
+    const m = S.family.find(x=>x.id===t.dataset.eat);
+    if(m){ m.eat = !m.eat; await persist(); render(); }
+    return;
+  }
+  if(t.dataset.stage){ t.classList.toggle('on'); return; }
+  if(t.id === 'm-eat'){ t.classList.toggle('on'); return; }
+  if(t.dataset.memberdel){
+    const m = S.family.find(x=>x.id===t.dataset.memberdel);
+    S.family = S.family.filter(x=>x.id!==t.dataset.memberdel);
+    await persist(); go('profile'); toast(`${m?m.name:'Gezinslid'} verwijderd`);
+    return;
+  }
+  if(t.dataset.savemember){
+    const name = $('m-name').value.trim();
+    if(!name){ toast('Geef het gezinslid eerst een naam'); return; }
+    const stages = [...document.querySelectorAll('#m-stages .chip.on')].map(c=>c.dataset.stage);
+    const mem = {
+      id: t.dataset.savemember === 'new' ? uid() : t.dataset.savemember,
+      name, stages,
+      eat: $('m-eat').classList.contains('on'),
+      note: $('m-note').value.trim()
+    };
+    const i = S.family.findIndex(x=>x.id===mem.id);
+    if(i>=0) S.family[i] = mem; else S.family.push(mem);
+    await persist(); go('profile','member',mem.id); toast('Gezinslid opgeslagen');
+    return;
+  }
+
+  if(t.id === 'cookExit'){ closeCook(); return; }
+  if(t.id === 'cookPrev'){ if(cook.i>0){ cook.i--; drawStep(); } return; }
+  if(t.id === 'cookNext'){
+    if(cook.i < cook.steps.length-1){ cook.i++; drawStep(); }
+    else { closeCook(); toast('Eet smakelijk'); }
+    return;
+  }
+  if(t.dataset.addtimer){ addStepTimer(+t.dataset.addtimer, t.dataset.tlabel, cook.i); drawStep(); return; }
+  if(t.dataset.ttoggle){ toggleTimerById(t.dataset.ttoggle); return; }
+  if(t.dataset.tdismiss){ dismissTimer(t.dataset.tdismiss); return; }
+});
+
+document.addEventListener('keydown', e=>{
+  if(e.key !== 'Enter') return;
+  if(e.target.id === 'shop-in'){ $('shop-add').click(); }
+  if(e.target.id === 'pan-in'){ $('pan-add').click(); }
+});
+
+document.addEventListener('change', async e=>{
+  if(e.target.dataset.day !== undefined){
+    const d = e.target.dataset.day;
+    if(e.target.value) S.plan[d] = e.target.value; else delete S.plan[d];
+    await persist(); render();
+  }
+  if(e.target.dataset.slider){ S.prefs[e.target.dataset.slider] = +e.target.value; await persist(); }
+  if(e.target.id === 'pan-photo-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; if(f) scanPantry(f); }
+});
+document.addEventListener('input', e=>{
+  const sl = e.target.closest && e.target.closest('[data-slider]');
+  if(sl){ const k = sl.dataset.slider; S.prefs[k] = +sl.value; const v = document.getElementById('val-'+k); if(v) v.textContent = sl.value+'×'; }
+});
+
+/* ---------------- boot ---------------- */
+(async function(){
+  const d = await loadData();
+  if(d){ Object.assign(S, d); if(!S.family) S.family = seedFamily(); if(!S.equip) S.equip = seedEquip(); if(!S.prefs) S.prefs = {...DEFAULT_PREFS}; }
+  else { S.recipes = seed(); S.family = seedFamily(); S.equip = seedEquip(); S.prefs = {...DEFAULT_PREFS}; await persist(); }
+  applyTheme();
+  if(!S.timers) S.timers = [];
+  render();
+  catchUpTimers();
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) catchUpTimers(); });
+  window.addEventListener('focus', catchUpTimers);
+})();
+</script>
+<script>
+/* PWA: service worker registreren voor offline gebruik en installeren */
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{ navigator.serviceWorker.register('service-worker.js').catch(()=>{}); });
+}
+</script>
+</body>
+</html>
