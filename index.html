@@ -292,12 +292,37 @@ async function saveData(d){
 }
 
 /* AI-sleutel — alleen op dit apparaat (localStorage) */
+const AI_MODEL = 'claude-sonnet-4-6';
+let lastAiError = '';
 function aiKey(){ try{ return (localStorage.getItem('panklaar_ai_key')||'').trim(); }catch(e){ return ''; } }
 function aiHeaders(){
   const h = {'Content-Type':'application/json'};
   const k = aiKey();
   if(k){ h['x-api-key'] = k; h['anthropic-version'] = '2023-06-01'; h['anthropic-dangerous-direct-browser-access'] = 'true'; }
   return h;
+}
+
+/* Eén plek voor alle AI-aanroepen, zodat een echte foutmelding zichtbaar wordt
+   in plaats van een algemeen "niet gelukt". */
+async function aiRequest(body){
+  if(!aiKey()) throw new Error('Geen AI-sleutel ingevuld. Ga naar Jij → AI-sleutel.');
+  let res;
+  try{
+    res = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST', headers: aiHeaders(), body: JSON.stringify(body)
+    });
+  }catch(e){
+    throw new Error('Geen verbinding met de AI-dienst. Controleer je internet.');
+  }
+  let data;
+  try{ data = await res.json(); }
+  catch(e){ throw new Error(`Onverwacht antwoord van de AI-dienst (status ${res.status}).`); }
+  if(!res.ok || (data && data.error)){
+    const msg = (data && data.error && data.error.message) || `status ${res.status}`;
+    throw new Error(msg);
+  }
+  if(!data || !Array.isArray(data.content)) throw new Error('Leeg antwoord van de AI-dienst.');
+  return data.content.map(c=>c.type==='text'?c.text:'').join('').replace(/```json|```/g,'').trim();
 }
 
 /* ---------------- state ---------------- */
@@ -791,10 +816,14 @@ function viewProfile(){
     </div>` : ''}
     <div class="eyebrow"><span>AI-sleutel</span></div>
     <div class="muted" style="font-size:14px;margin:0 4px 10px;line-height:1.4">Plak je Anthropic API-sleutel zodat 'Wat zullen we koken?' en de voorraad-foto werken. Blijft alleen op dit apparaat.</div>
-    <div class="split" style="margin-bottom:20px">
+    <div class="split" style="margin-bottom:10px">
       <input class="inp" id="ai-key" type="password" placeholder="sk-ant-..." value="${esc(aiKey())}" style="flex:1">
       <button class="btn fill" id="ai-save" aria-label="Sleutel opslaan">${ic('check','')}</button>
     </div>
+    <button class="btn ghost wide" id="ai-test" style="margin-bottom:10px">${ic('spark','')} Sleutel testen</button>
+    ${lastAiError ? `<div class="sketch soft card" style="margin-bottom:20px">
+      <div class="muted" style="font-size:14px;line-height:1.45">Laatste AI-melding: ${esc(lastAiError)}</div>
+    </div>` : '<div style="margin-bottom:20px"></div>'}
     <div class="eyebrow"><span>Weergave</span></div>
     <div class="chips" style="margin-bottom:20px">
       ${[['auto','Auto'],['light','Daglicht'],['dark','Schoolbord']].map(([v,l])=>
@@ -961,22 +990,18 @@ async function scanPantry(file){
   let img;
   try{ img = await fileToB64(file); }catch(e){ toast('Kon de foto niet lezen'); return; }
   try{
-    const res = await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST', headers: aiHeaders(),
-      body: JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:600, messages:[{role:'user', content:[
-        {type:'image', source:{type:'base64', media_type:img.media_type, data:img.data}},
-        {type:'text', text:'Dit is een foto van eten of voorraad. Noem de herkenbare, eetbare ingrediënten die je ziet. Antwoord met UITSLUITEND een JSON-array van korte Nederlandse namen, enkelvoud en kleine letters, geen merken of verpakkingen. Voorbeeld: ["ei","tomaat","kaas"].'}
-      ]}] })
-    });
-    const data = await res.json();
-    const txt = data.content.map(c=>c.type==='text'?c.text:'').join('').replace(/```json|```/g,'').trim();
+    const txt = await aiRequest({ model:AI_MODEL, max_tokens:600, messages:[{role:'user', content:[
+      {type:'image', source:{type:'base64', media_type:img.media_type, data:img.data}},
+      {type:'text', text:'Dit is een foto van eten of voorraad. Noem de herkenbare, eetbare ingrediënten die je ziet. Antwoord met UITSLUITEND een JSON-array van korte Nederlandse namen, enkelvoud en kleine letters, geen merken of verpakkingen. Voorbeeld: ["ei","tomaat","kaas"].'}
+    ]}] });
     const items = JSON.parse(txt);
     let added = 0;
     items.forEach(x=>{ const v = String(x).trim().toLowerCase(); if(v && !S.pantry.includes(v)){ S.pantry.push(v); added++; } });
     await persist(); render();
     toast(added ? `${added} toegevoegd uit de foto` : 'Niks nieuws gevonden');
   }catch(e){
-    toast('Foto bekijken lukte niet. Probeer typen.');
+    lastAiError = e.message || String(e);
+    toast(`Foto: ${lastAiError}`);
   }
 }
 
@@ -1055,23 +1080,21 @@ Bedenk 1 tot 3 verschillende recepten waaruit ik kan kiezen.
 Antwoord met UITSLUITEND geldige JSON, geen markdown: een array van 1 tot 3 recepten:
 [{"name":"","type":"${opts.meal}","mins":25,"serves":${serves},"level":"easy","ingredients":["..."],"steps":["..."]}]`;
   try{
-    const res = await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST', headers: aiHeaders(),
-      body: JSON.stringify({model:'claude-sonnet-4-6', max_tokens:1000, messages:[{role:'user',content:prompt}]})
-    });
-    const data = await res.json();
-    const txt = data.content.map(c=>c.type==='text'?c.text:'').join('').replace(/```json|```/g,'').trim();
+    const txt = await aiRequest({model:AI_MODEL, max_tokens:2000, messages:[{role:'user',content:prompt}]});
     let arr = JSON.parse(txt);
     if(!Array.isArray(arr)) arr = [arr];
     suggestions = arr.slice(0,3).map(r=>({ ...r, id:'c'+uid() }));
     go('recipes','picks');
   }catch(e){
+    lastAiError = e.message || String(e);
     const noKey = !aiKey();
     $('screen').innerHTML = `<h1 class="title hand">${noKey ? 'AI-sleutel nodig' : 'Niet gelukt'}</h1>
       <p class="subtitle">${noKey
         ? 'Vul eerst je Anthropic API-sleutel in bij Jij → AI-sleutel; dan kan ik recepten bedenken.'
-        : 'De aanroep kwam niet door. Controleer je AI-sleutel en internetverbinding, en probeer het zo nog eens.'}</p>
+        : 'De AI-dienst gaf deze melding terug:'}</p>
+      ${noKey ? '' : `<div class="sketch card"><div class="tx" style="font-size:17px;line-height:1.45">${esc(lastAiError)}</div></div>`}
       <button class="btn fill wide" data-tab="profile">${ic('user','')} Naar AI-sleutel</button>
+      <button class="btn ghost wide" data-go="suggest" style="margin-top:10px">Nog eens proberen</button>
       <button class="btn ghost wide" data-tab="home" style="margin-top:10px">Terug naar start</button>`;
   }
 }
@@ -1225,7 +1248,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#pan-add,#pan-photo-btn,#ai-save,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand]');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand]');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
@@ -1311,7 +1334,16 @@ document.addEventListener('click', async (e)=>{
     await persist(); render(); return;
   }
   if(t.dataset.theme){ S.theme = t.dataset.theme; applyTheme(); await persist(); render(); return; }
-  if(t.id === 'ai-save'){ try{ localStorage.setItem('panklaar_ai_key', $('ai-key').value.trim()); }catch(e){} toast('AI-sleutel opgeslagen'); return; }
+  if(t.id === 'ai-save'){ try{ localStorage.setItem('panklaar_ai_key', $('ai-key').value.trim()); }catch(e){} lastAiError=''; toast('AI-sleutel opgeslagen'); render(); return; }
+  if(t.id === 'ai-test'){
+    try{ localStorage.setItem('panklaar_ai_key', $('ai-key').value.trim()); }catch(e){}
+    toast('Sleutel testen…');
+    try{
+      await aiRequest({model:AI_MODEL, max_tokens:16, messages:[{role:'user', content:'Antwoord met alleen: ok'}]});
+      lastAiError = ''; toast('Sleutel werkt!');
+    }catch(e){ lastAiError = e.message || String(e); toast(lastAiError); }
+    render(); return;
+  }
 
   if(t.dataset.fam === 'toggle'){ famOpen = !famOpen; render(); return; }
   if(t.dataset.prefmenu){ prefOpen = !prefOpen; render(); return; }
