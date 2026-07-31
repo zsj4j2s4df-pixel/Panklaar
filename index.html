@@ -295,6 +295,10 @@ async function saveData(d){
 const AI_MODEL = 'claude-sonnet-4-6';
 let lastAiError = '';
 function aiKey(){ try{ return (localStorage.getItem('panklaar_ai_key')||'').trim(); }catch(e){ return ''; } }
+function saveAiKey(v){ try{ localStorage.setItem('panklaar_ai_key', String(v||'').trim()); return true; }catch(e){ return false; } }
+/* kan deze browser überhaupt opslaan? (privémodus blokkeert dit soms) */
+function storageOk(){ try{ localStorage.setItem('__pk_t','1'); localStorage.removeItem('__pk_t'); return true; }catch(e){ return false; } }
+function maskKey(k){ return k.length < 14 ? '•'.repeat(k.length) : `${k.slice(0,8)}…${k.slice(-4)}`; }
 function aiHeaders(){
   const h = {'Content-Type':'application/json'};
   const k = aiKey();
@@ -820,6 +824,15 @@ function viewProfile(){
       <input class="inp" id="ai-key" type="password" placeholder="sk-ant-..." value="${esc(aiKey())}" style="flex:1">
       <button class="btn fill" id="ai-save" aria-label="Sleutel opslaan">${ic('check','')}</button>
     </div>
+    <div class="sketch soft card" style="margin-bottom:10px">
+      <div style="font-size:15px;line-height:1.45">
+        ${!storageOk()
+          ? 'Deze browser mag niets opslaan (privémodus?). De sleutel blijft daardoor niet bewaard.'
+          : aiKey()
+            ? `Sleutel opgeslagen op dit apparaat: <span class="hand">${esc(maskKey(aiKey()))}</span>`
+            : 'Nog geen sleutel op dit apparaat. Let op: elke app bewaart de sleutel apart — die van je koffie-app telt hier niet mee.'}
+      </div>
+    </div>
     <button class="btn ghost wide" id="ai-test" style="margin-bottom:10px">${ic('spark','')} Sleutel testen</button>
     ${lastAiError ? `<div class="sketch soft card" style="margin-bottom:20px">
       <div class="muted" style="font-size:14px;line-height:1.45">Laatste AI-melding: ${esc(lastAiError)}</div>
@@ -1334,9 +1347,12 @@ document.addEventListener('click', async (e)=>{
     await persist(); render(); return;
   }
   if(t.dataset.theme){ S.theme = t.dataset.theme; applyTheme(); await persist(); render(); return; }
-  if(t.id === 'ai-save'){ try{ localStorage.setItem('panklaar_ai_key', $('ai-key').value.trim()); }catch(e){} lastAiError=''; toast('AI-sleutel opgeslagen'); render(); return; }
+  if(t.id === 'ai-save'){
+    const ok = saveAiKey($('ai-key').value);
+    lastAiError=''; toast(ok ? 'AI-sleutel opgeslagen' : 'Opslaan lukt niet in deze browser'); render(); return;
+  }
   if(t.id === 'ai-test'){
-    try{ localStorage.setItem('panklaar_ai_key', $('ai-key').value.trim()); }catch(e){}
+    saveAiKey($('ai-key').value);
     toast('Sleutel testen…');
     try{
       await aiRequest({model:AI_MODEL, max_tokens:16, messages:[{role:'user', content:'Antwoord met alleen: ok'}]});
@@ -1427,6 +1443,8 @@ document.addEventListener('change', async e=>{
   }
   if(e.target.dataset.slider){ S.prefs[e.target.dataset.slider] = +e.target.value; await persist(); }
   if(e.target.id === 'pan-photo-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; if(f) scanPantry(f); }
+  /* sleutel ook bewaren als je het veld verlaat zonder op ✓ te drukken */
+  if(e.target.id === 'ai-key'){ saveAiKey(e.target.value); }
 });
 document.addEventListener('input', e=>{
   const sl = e.target.closest && e.target.closest('[data-slider]');
