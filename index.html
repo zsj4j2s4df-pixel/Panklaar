@@ -620,8 +620,15 @@ function viewDetail(id){
       </div>
     </div>
     <div class="eyebrow"><span>Ingrediënten</span><button data-addlist="${r.id}">op lijst</button></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 8px">Vink aan wat je al in huis hebt — dat gaat niet naar je lijst.</div>
     <div class="sketch card">
-      ${r.ingredients.map(i=>`<div class="step"><span class="n">·</span><span class="tx">${esc(i)}</span></div>`).join('')}
+      ${r.ingredients.map((i,ix)=>{
+        const have = (r.have||[]).includes(i);
+        return `<div class="step" style="align-items:center">
+          <button class="tickbox ${have?'on':''}" data-have="${r.id}:${ix}" aria-label="Al in huis">${ic('check','')}</button>
+          <span class="tx ${have?'done':''}">${esc(i)}</span>
+        </div>`;
+      }).join('')}
     </div>
     <div class="eyebrow"><span>Stappen</span></div>
     <div class="sketch card">
@@ -1214,7 +1221,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#pan-add,#pan-photo-btn,#ai-save,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand]');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#pan-add,#pan-photo-btn,#ai-save,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand]');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
@@ -1242,6 +1249,7 @@ document.addEventListener('click', async (e)=>{
       steps: $('f-steps').value.split('\n').map(s=>s.trim()).filter(Boolean)
     };
     const i = S.recipes.findIndex(r=>r.id===rec.id);
+    if(i>=0 && S.recipes[i].have) rec.have = S.recipes[i].have.filter(h=>rec.ingredients.includes(h));
     if(i>=0) S.recipes[i] = rec; else S.recipes.push(rec);
     await persist(); go('recipes','detail',rec.id); toast('Recept opgeslagen');
     return;
@@ -1255,9 +1263,20 @@ document.addEventListener('click', async (e)=>{
     await persist(); go('recipes'); toast(`${r?r.name:'Recept'} verwijderd`);
     return;
   }
+  if(t.dataset.have){
+    const c = t.dataset.have.lastIndexOf(':');
+    const rid = t.dataset.have.slice(0,c), ix = +t.dataset.have.slice(c+1);
+    const r = S.recipes.find(x=>x.id===rid); if(!r) return;
+    const ing = r.ingredients[ix]; if(ing==null) return;
+    r.have = r.have || [];
+    r.have = r.have.includes(ing) ? r.have.filter(x=>x!==ing) : [...r.have, ing];
+    await persist(); render(); return;
+  }
   if(t.dataset.addlist){
     const r = S.recipes.find(x=>x.id===t.dataset.addlist);
-    addToList(r.ingredients); toast('Toegevoegd aan je lijst'); return;
+    const need = r.ingredients.filter(i=>!(r.have||[]).includes(i));
+    if(!need.length){ toast('Alles is al in huis'); return; }
+    addToList(need); toast(`${need.length} op je lijst gezet`); return;
   }
 
   if(t.dataset.tick){
