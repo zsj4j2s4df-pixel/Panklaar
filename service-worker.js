@@ -1,6 +1,6 @@
 /* Panklaar service worker — offline app-shell.
    Verhoog CACHE bij een nieuwe versie, anders houden telefoons de oude. */
-const CACHE = 'panklaar-v11';
+const CACHE = 'panklaar-v12';
 const ASSETS = [
   './',
   './index.html',

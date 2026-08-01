@@ -488,7 +488,11 @@ const PREF_FLAGS = [
   {id:'eenpans',     label:'Weinig afwas',      hint:'zo min mogelijk afwas, het liefst één pan'},
   {id:'gezond',      label:'Gezond',            hint:'gezond en volgens de Schijf van Vijf'}
 ];
-const DEFAULT_PREFS = {veg:7, fish:1, meat:3, flags:['gevarieerd']};
+const DEFAULT_PREFS = {veg:7, fish:1, meat:3, flags:['gevarieerd'], level:'any'};
+
+/* kookniveau — ingesteld bij Voorkeuren, standaard klaargezet in de kookvraag */
+const LEVEL_CHOICES = [['any','Maakt niet uit'],['easy','Makkelijk'],['medium','Gemiddeld'],['hard','Pittig']];
+const prefLevel = () => (S.prefs && S.prefs.level) || 'any';
 
 /* hoofdingrediënt — losse keuze in de pop-up, naast de voorkeuren */
 const MAIN_ING = [
@@ -963,6 +967,10 @@ function viewProfile(){
       <div class="pref-row" style="margin-bottom:6px"><span>Vlees</span><input type="range" min="0" max="7" value="${S.prefs.meat}" data-slider="meat"><span class="pref-val hand" id="val-meat">${S.prefs.meat}×</span></div>
       <div class="muted" style="font-size:14px">Aantal dagen per week</div>
     </div>
+    <div class="eyebrow"><span>Kookniveau</span></div>
+    <div class="chips" style="margin-bottom:20px">
+      ${LEVEL_CHOICES.map(([v,l])=>`<button class="chip ${prefLevel()===v?'on':''}" data-preflevel="${v}">${l}</button>`).join('')}
+    </div>
     <div class="eyebrow"><span>Wat is belangrijk?</span></div>
     <div class="chips" style="margin-bottom:20px">
       ${PREF_FLAGS.map(f=>`<button class="chip ${(S.prefs.flags||[]).includes(f.id)?'on':''}" data-prefflag="${f.id}">${f.label}</button>`).join('')}
@@ -1127,7 +1135,7 @@ function prefsPrompt(flags){
 }
 
 function openAsk(){
-  ask = { meal:'dinner', who:(S.family||[]).filter(m=>m.eat).map(m=>m.id), prefs:[...((S.prefs&&S.prefs.flags)||[])], count:(S.prefs&&S.prefs.count)||3, main:[], extra:'' };
+  ask = { meal:'dinner', who:(S.family||[]).filter(m=>m.eat).map(m=>m.id), prefs:[...((S.prefs&&S.prefs.flags)||[])], count:(S.prefs&&S.prefs.count)||3, main:[], extra:'', level:prefLevel() };
   $('ask').classList.add('on'); renderAsk();
 }
 function closeAsk(){ $('ask').classList.remove('on'); }
@@ -1154,6 +1162,9 @@ function renderAsk(){
     </div>
     <div class="field"><label>Hoofdingrediënt</label>
       <div class="chips">${MAIN_ING.map(m=>`<button class="chip ${ask.main.includes(m.id)?'on':''}" data-ask-main="${m.id}">${m.label}</button>`).join('')}</div>
+    </div>
+    <div class="field"><label>Kookniveau</label>
+      <div class="chips">${LEVEL_CHOICES.map(([v,l])=>`<button class="chip ${ask.level===v?'on':''}" data-ask-level="${v}">${l}</button>`).join('')}</div>
     </div>
     <div class="field"><label>Hoeveel recepten</label>
       <div class="chips">${[1,2,3,4,5].map(n=>`<button class="chip ${ask.count===n?'on':''}" data-ask-count="${n}">${n}</button>`).join('')}</div>
@@ -1259,17 +1270,19 @@ async function suggest(opts){
   const mainNote = mains.length ? ` Maak het ${mains.join(' of ')}.` : '';
   const wish = String(opts.extra||'').trim();
   const wishNote = wish ? ` Extra wens van de kok, volg deze strikt: ${wish}.` : '';
+  const lvl = (opts.level && opts.level !== 'any') ? opts.level : '';
+  const levelNote = lvl ? ` Houd het kookniveau op ${LEVEL_NL[lvl]} — pas de techniek en het aantal stappen daarop aan.` : '';
   const mealNote = opts.meal==='lunchtogo' ? ' Het is een lunch om mee te nemen naar werk: thuis vooraf klaar te maken, lekt niet, blijft lekker koud of is makkelijk op te warmen, en past in een lunchbox of meeneembakje.' : '';
   const members = (S.family||[]).filter(m=>opts.who.includes(m.id));
   const serves = members.length || 2;
   $('screen').innerHTML = `<h1 class="title hand">Even denken…</h1>
     <p class="subtitle">Ik stel ${count===1?'een idee':`${count} ideeën`} samen op basis van je voorkeuren.</p>${PAN_DRAWING}`;
   const prompt = `Bedenk één ${mealLabel}. In huis: ${S.pantry.length ? S.pantry.join(', ') : 'een gewone basisvoorraad'}.
-Maximaal 45 minuten, tenzij anders gevraagd. Schrijf in het Nederlands, tutoyeren.${mealNote}${mainNote}${wishNote}
+Maximaal 45 minuten, tenzij anders gevraagd. Schrijf in het Nederlands, tutoyeren.${mealNote}${mainNote}${levelNote}${wishNote}
 ${equipPrompt()}${prefsPrompt(opts.prefs)}${familyPrompt(members)}
 Bedenk precies ${count} ${count===1?'recept':'verschillende recepten'} waaruit ik kan kiezen.
 Antwoord met UITSLUITEND geldige JSON, geen markdown: een array van ${count} ${count===1?'recept':'recepten'}:
-[{"name":"","type":"${opts.meal}","mins":25,"serves":${serves},"level":"easy","ingredients":["..."],"steps":["..."]}]`;
+[{"name":"","type":"${opts.meal}","mins":25,"serves":${serves},"level":"${lvl||'easy'}","ingredients":["..."],"steps":["..."]}]`;
   try{
     const txt = await aiRequest({model:AI_MODEL, max_tokens:Math.min(8000, 1200*count + 800), messages:[{role:'user',content:prompt}]});
     let arr = JSON.parse(txt);
@@ -1450,7 +1463,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-pick],#picks-save');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
@@ -1591,6 +1604,7 @@ document.addEventListener('click', async (e)=>{
     S.equip = (S.equip||[]).includes(id) ? S.equip.filter(x=>x!==id) : [...(S.equip||[]), id];
     await persist(); render(); return;
   }
+  if(t.dataset.preflevel){ S.prefs.level = t.dataset.preflevel; await persist(); render(); return; }
   if(t.dataset.prefflag){
     const id = t.dataset.prefflag; const cur = S.prefs.flags||[];
     S.prefs.flags = cur.includes(id) ? cur.filter(x=>x!==id) : [...cur, id];
@@ -1602,6 +1616,7 @@ document.addEventListener('click', async (e)=>{
   if(t.dataset.askWho){ const id = t.dataset.askWho; ask.who = ask.who.includes(id) ? ask.who.filter(x=>x!==id) : [...ask.who, id]; renderAsk(); return; }
   if(t.dataset.askPref){ const id = t.dataset.askPref; ask.prefs = ask.prefs.includes(id) ? ask.prefs.filter(x=>x!==id) : [...ask.prefs, id]; renderAsk(); return; }
   if(t.dataset.askMain){ const id = t.dataset.askMain; ask.main = ask.main.includes(id) ? ask.main.filter(x=>x!==id) : [...ask.main, id]; renderAsk(); return; }
+  if(t.dataset.askLevel){ ask.level = t.dataset.askLevel; S.prefs.level = ask.level; persist(); renderAsk(); return; }
   if(t.dataset.askCount){ ask.count = +t.dataset.askCount; S.prefs.count = ask.count; persist(); renderAsk(); return; }
   if(t.dataset.member){ go('profile','member',t.dataset.member); return; }
   if(t.dataset.memberedit){ go('profile','memberEdit',t.dataset.memberedit); return; }
