@@ -488,6 +488,7 @@ let S = {
   tab:'home', view:null, arg:null, filter:'all'
 };
 let famOpen = false, prefOpen = false, equipOpen = false, pantOpen = false, ask = null, suggestions = [];
+let picked = new Set();   /* welke voorstellen aangevinkt staan om te bewaren */
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
 
@@ -967,7 +968,7 @@ function prefsPrompt(flags){
 }
 
 function openAsk(){
-  ask = { meal:'dinner', who:(S.family||[]).filter(m=>m.eat).map(m=>m.id), prefs:[...((S.prefs&&S.prefs.flags)||[])] };
+  ask = { meal:'dinner', who:(S.family||[]).filter(m=>m.eat).map(m=>m.id), prefs:[...((S.prefs&&S.prefs.flags)||[])], count:(S.prefs&&S.prefs.count)||3 };
   $('ask').classList.add('on'); renderAsk();
 }
 function closeAsk(){ $('ask').classList.remove('on'); }
@@ -987,7 +988,10 @@ function renderAsk(){
     <div class="field"><label>Voorkeur</label>
       <div class="chips">${PREF_FLAGS.map(f=>`<button class="chip ${ask.prefs.includes(f.id)?'on':''}" data-ask-pref="${f.id}">${f.label}</button>`).join('')}</div>
     </div>
-    <button class="btn fill wide" id="askGo">${ic('spark','')} Bedenk recept</button>
+    <div class="field"><label>Hoeveel recepten</label>
+      <div class="chips">${[1,2,3,4,5].map(n=>`<button class="chip ${ask.count===n?'on':''}" data-ask-count="${n}">${n}</button>`).join('')}</div>
+    </div>
+    <button class="btn fill wide" id="askGo">${ic('spark','')} ${ask.count===1?'Bedenk recept':`Bedenk ${ask.count} recepten`}</button>
   `;
 }
 
@@ -1025,19 +1029,21 @@ function viewPicks(){
       <span class="h hand">Kies een recept</span>
       <span style="width:28px"></span>
     </div>
-    <p class="subtitle" style="margin-top:6px">${suggestions.length} ${suggestions.length===1?'idee':'ideeën'} op basis van je keuzes. Tik om te bekijken.</p>
+    <p class="subtitle" style="margin-top:6px">${suggestions.length} ${suggestions.length===1?'idee':'ideeën'} op basis van je keuzes. Vink aan wat je wilt bewaren; tik op de naam om te bekijken.</p>
     ${suggestions.map(candidateCard).join('')}
-    <button class="btn ghost wide" data-go="suggest" style="margin-top:6px">${ic('spark','')} Nog eens proberen</button>
+    <button class="btn fill wide" id="picks-save" style="margin-top:6px">${ic('save','')} ${picked.size ? `Bewaar ${picked.size} recept${picked.size===1?'':'en'}` : 'Niets bewaren'}</button>
+    <button class="btn ghost wide" data-go="suggest" style="margin-top:10px">${ic('spark','')} Nog eens proberen</button>
   `;
 }
 function candidateCard(c){
-  return `<div class="sketch card" style="background:var(${typeOf(c.type).v})">
+  const on = picked.has(c.id);
+  return `<div class="sketch card" style="background:var(${typeOf(c.type).v});${on?'':'opacity:.6'}">
     <div class="row">
+      <button class="tickbox ${on?'on':''}" data-pick="${c.id}" aria-label="Bewaren">${ic('check','')}</button>
       <div class="grow" data-cand="${c.id}" style="cursor:pointer">
         <div class="name hand">${esc(c.name)}</div>
         <div class="meta">${c.mins} min · ${c.serves} pers. · ${LEVEL_NL[c.level]||c.level}</div>
       </div>
-      <button class="icon-btn" data-savecand="${c.id}" aria-label="Bewaren">${ic('save','')}</button>
     </div>
   </div>`;
 }
@@ -1080,23 +1086,25 @@ function saveCandidate(id){
 /* ---------------- suggestion ---------------- */
 async function suggest(opts){
   opts = opts || { meal:'dinner', who:(S.family||[]).filter(m=>m.eat).map(m=>m.id), prefs:(S.prefs&&S.prefs.flags)||[] };
+  const count = Math.min(5, Math.max(1, +opts.count || 3));
   const mealLabel = {breakfast:'ontbijt', lunch:'lunch', lunchtogo:'lunch om mee te nemen naar werk', dinner:'avondmaaltijd'}[opts.meal] || 'maaltijd';
   const mealNote = opts.meal==='lunchtogo' ? ' Het is een lunch om mee te nemen naar werk: thuis vooraf klaar te maken, lekt niet, blijft lekker koud of is makkelijk op te warmen, en past in een lunchbox of meeneembakje.' : '';
   const members = (S.family||[]).filter(m=>opts.who.includes(m.id));
   const serves = members.length || 2;
   $('screen').innerHTML = `<h1 class="title hand">Even denken…</h1>
-    <p class="subtitle">Ik stel een paar ideeën samen op basis van je voorkeuren.</p>${PAN_DRAWING}`;
+    <p class="subtitle">Ik stel ${count===1?'een idee':`${count} ideeën`} samen op basis van je voorkeuren.</p>${PAN_DRAWING}`;
   const prompt = `Bedenk één ${mealLabel}. In huis: ${S.pantry.length ? S.pantry.join(', ') : 'een gewone basisvoorraad'}.
 Maximaal 45 minuten, tenzij anders gevraagd. Schrijf in het Nederlands, tutoyeren.${mealNote}
 ${equipPrompt()}${prefsPrompt(opts.prefs)}${familyPrompt(members)}
-Bedenk 1 tot 3 verschillende recepten waaruit ik kan kiezen.
-Antwoord met UITSLUITEND geldige JSON, geen markdown: een array van 1 tot 3 recepten:
+Bedenk precies ${count} ${count===1?'recept':'verschillende recepten'} waaruit ik kan kiezen.
+Antwoord met UITSLUITEND geldige JSON, geen markdown: een array van ${count} ${count===1?'recept':'recepten'}:
 [{"name":"","type":"${opts.meal}","mins":25,"serves":${serves},"level":"easy","ingredients":["..."],"steps":["..."]}]`;
   try{
-    const txt = await aiRequest({model:AI_MODEL, max_tokens:2000, messages:[{role:'user',content:prompt}]});
+    const txt = await aiRequest({model:AI_MODEL, max_tokens:Math.min(8000, 1200*count + 800), messages:[{role:'user',content:prompt}]});
     let arr = JSON.parse(txt);
     if(!Array.isArray(arr)) arr = [arr];
-    suggestions = arr.slice(0,3).map(r=>({ ...r, id:'c'+uid() }));
+    suggestions = arr.slice(0,count).map(r=>({ ...r, id:'c'+uid() }));
+    picked = new Set(suggestions.map(x=>x.id));   /* standaard alles bewaren */
     go('recipes','picks');
   }catch(e){
     lastAiError = e.message || String(e);
@@ -1261,7 +1269,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand]');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-pick],#picks-save');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
@@ -1366,6 +1374,18 @@ document.addEventListener('click', async (e)=>{
   if(t.dataset.equipmenu){ equipOpen = !equipOpen; render(); return; }
   if(t.dataset.pantmenu){ pantOpen = !pantOpen; render(); return; }
   if(t.dataset.cand){ go('recipes','cand',t.dataset.cand); return; }
+  if(t.dataset.pick){
+    const id = t.dataset.pick;
+    picked.has(id) ? picked.delete(id) : picked.add(id);
+    render(); return;
+  }
+  if(t.id === 'picks-save'){
+    if(!picked.size){ toast('Vink eerst een recept aan'); return; }
+    const n = [...picked].map(id=>saveCandidate(id)).filter(Boolean).length;
+    picked.clear(); await persist(); go('recipes');
+    toast(`${n} recept${n===1?'':'en'} bewaard`);
+    return;
+  }
   if(t.dataset.savecand){
     const rec = saveCandidate(t.dataset.savecand);
     if(rec){ await persist(); go('recipes','detail',rec.id); toast('Recept bewaard'); }
@@ -1386,6 +1406,7 @@ document.addEventListener('click', async (e)=>{
   if(t.dataset.askMeal){ ask.meal = t.dataset.askMeal; renderAsk(); return; }
   if(t.dataset.askWho){ const id = t.dataset.askWho; ask.who = ask.who.includes(id) ? ask.who.filter(x=>x!==id) : [...ask.who, id]; renderAsk(); return; }
   if(t.dataset.askPref){ const id = t.dataset.askPref; ask.prefs = ask.prefs.includes(id) ? ask.prefs.filter(x=>x!==id) : [...ask.prefs, id]; renderAsk(); return; }
+  if(t.dataset.askCount){ ask.count = +t.dataset.askCount; S.prefs.count = ask.count; persist(); renderAsk(); return; }
   if(t.dataset.member){ go('profile','member',t.dataset.member); return; }
   if(t.dataset.memberedit){ go('profile','memberEdit',t.dataset.memberedit); return; }
   if(t.dataset.eat){
