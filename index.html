@@ -488,6 +488,13 @@ const PREF_FLAGS = [
 ];
 const DEFAULT_PREFS = {veg:7, fish:1, meat:3, flags:['gevarieerd']};
 
+/* hoofdingrediënt — losse keuze in de pop-up, naast de voorkeuren */
+const MAIN_ING = [
+  {id:'vlees',   label:'Vlees',   hint:'met vlees als hoofdingrediënt'},
+  {id:'vis',     label:'Vis',     hint:'met vis of zeevruchten als hoofdingrediënt'},
+  {id:'groente', label:'Groente', hint:'vegetarisch, met groente als hoofdingrediënt'}
+];
+
 let S = {
   recipes:[], shopping:[], pantry:[], plan:{}, theme:'auto', family:[], equip:[], prefs:{veg:7,fish:1,meat:3,flags:[]}, timers:[],
   tab:'home', view:null, arg:null, filter:'all'
@@ -670,7 +677,13 @@ function viewHome(){
 }
 
 function viewRecipes(){
-  const list = S.filter==='all' ? S.recipes : S.recipes.filter(r=>r.type===S.filter);
+  const all = S.filter === 'all';
+  const list = all ? S.recipes : S.recipes.filter(r=>r.type===S.filter);
+  const known = new Set(TYPES.map(t=>t.id));
+  const groups = TYPES.map(t=>({label:t.label, items:S.recipes.filter(r=>r.type===t.id)})).filter(g=>g.items.length);
+  const rest = S.recipes.filter(r=>!known.has(r.type));
+  if(rest.length) groups.push({label:'Overig', items:rest});
+  const section = g => `<div class="eyebrow"><span>${g.label}</span><span style="font-size:16px">${g.items.length}</span></div>${g.items.map(recipeCard).join('')}`;
   return `
     <h1 class="title hand">Recepten</h1>
     <p class="subtitle">${S.recipes.length} opgeslagen</p>
@@ -678,7 +691,7 @@ function viewRecipes(){
       <button class="chip ${S.filter==='all'?'on':''}" data-filter="all">Alles</button>
       ${TYPES.map(t=>`<button class="chip ${S.filter===t.id?'on':''}" data-filter="${t.id}">${t.label}</button>`).join('')}
     </div>
-    ${list.length ? list.map(recipeCard).join('') : `
+    ${list.length ? (all ? groups.map(section).join('') : list.map(recipeCard).join('')) : `
       <div class="empty">
         <div class="draw"><svg viewBox="0 0 200 90">
           <path d="M30 44 C30 62 52 74 100 74 C148 74 170 62 170 44 Z"/>
@@ -1036,11 +1049,13 @@ function prefsPrompt(flags){
 }
 
 function openAsk(){
-  ask = { meal:'dinner', who:(S.family||[]).filter(m=>m.eat).map(m=>m.id), prefs:[...((S.prefs&&S.prefs.flags)||[])], count:(S.prefs&&S.prefs.count)||3 };
+  ask = { meal:'dinner', who:(S.family||[]).filter(m=>m.eat).map(m=>m.id), prefs:[...((S.prefs&&S.prefs.flags)||[])], count:(S.prefs&&S.prefs.count)||3, main:[], extra:'' };
   $('ask').classList.add('on'); renderAsk();
 }
 function closeAsk(){ $('ask').classList.remove('on'); }
 function renderAsk(){
+  const typed = document.getElementById('ask-extra');
+  if(typed) ask.extra = typed.value;   /* niet kwijtraken bij het hertekenen */
   const MEALS = [['breakfast','Ontbijt'],['lunch','Lunch'],['lunchtogo','Lunch to go'],['dinner','Diner']];
   $('ask').querySelector('.sheet-card').innerHTML = `
     <div class="cook-head" style="margin-bottom:10px">
@@ -1055,6 +1070,12 @@ function renderAsk(){
     </div>
     <div class="field"><label>Voorkeur</label>
       <div class="chips">${PREF_FLAGS.map(f=>`<button class="chip ${ask.prefs.includes(f.id)?'on':''}" data-ask-pref="${f.id}">${f.label}</button>`).join('')}</div>
+    </div>
+    <div class="field"><label>Hoofdingrediënt</label>
+      <div class="chips">${MAIN_ING.map(m=>`<button class="chip ${ask.main.includes(m.id)?'on':''}" data-ask-main="${m.id}">${m.label}</button>`).join('')}</div>
+    </div>
+    <div class="field"><label for="ask-extra">Extra wens (optioneel)</label>
+      <input class="inp" id="ask-extra" placeholder="bijv. zonder saus" value="${esc(ask.extra||'')}">
     </div>
     <div class="field"><label>Hoeveel recepten</label>
       <div class="chips">${[1,2,3,4,5].map(n=>`<button class="chip ${ask.count===n?'on':''}" data-ask-count="${n}">${n}</button>`).join('')}</div>
@@ -1156,13 +1177,17 @@ async function suggest(opts){
   opts = opts || { meal:'dinner', who:(S.family||[]).filter(m=>m.eat).map(m=>m.id), prefs:(S.prefs&&S.prefs.flags)||[] };
   const count = Math.min(5, Math.max(1, +opts.count || 3));
   const mealLabel = {breakfast:'ontbijt', lunch:'lunch', lunchtogo:'lunch om mee te nemen naar werk', dinner:'avondmaaltijd'}[opts.meal] || 'maaltijd';
+  const mains = (opts.main||[]).map(id=>{ const m = MAIN_ING.find(x=>x.id===id); return m?m.hint:null; }).filter(Boolean);
+  const mainNote = mains.length ? ` Maak het ${mains.join(' of ')}.` : '';
+  const wish = String(opts.extra||'').trim();
+  const wishNote = wish ? ` Extra wens van de kok, volg deze strikt: ${wish}.` : '';
   const mealNote = opts.meal==='lunchtogo' ? ' Het is een lunch om mee te nemen naar werk: thuis vooraf klaar te maken, lekt niet, blijft lekker koud of is makkelijk op te warmen, en past in een lunchbox of meeneembakje.' : '';
   const members = (S.family||[]).filter(m=>opts.who.includes(m.id));
   const serves = members.length || 2;
   $('screen').innerHTML = `<h1 class="title hand">Even denken…</h1>
     <p class="subtitle">Ik stel ${count===1?'een idee':`${count} ideeën`} samen op basis van je voorkeuren.</p>${PAN_DRAWING}`;
   const prompt = `Bedenk één ${mealLabel}. In huis: ${S.pantry.length ? S.pantry.join(', ') : 'een gewone basisvoorraad'}.
-Maximaal 45 minuten, tenzij anders gevraagd. Schrijf in het Nederlands, tutoyeren.${mealNote}
+Maximaal 45 minuten, tenzij anders gevraagd. Schrijf in het Nederlands, tutoyeren.${mealNote}${mainNote}${wishNote}
 ${equipPrompt()}${prefsPrompt(opts.prefs)}${familyPrompt(members)}
 Bedenk precies ${count} ${count===1?'recept':'verschillende recepten'} waaruit ik kan kiezen.
 Antwoord met UITSLUITEND geldige JSON, geen markdown: een array van ${count} ${count===1?'recept':'recepten'}:
@@ -1347,7 +1372,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-pick],#picks-save');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-pick],#picks-save');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
@@ -1487,10 +1512,11 @@ document.addEventListener('click', async (e)=>{
     await persist(); render(); return;
   }
   if(t.id === 'askClose'){ closeAsk(); return; }
-  if(t.id === 'askGo'){ const o = ask; closeAsk(); suggest(o); return; }
+  if(t.id === 'askGo'){ const el = $('ask-extra'); if(el) ask.extra = el.value; const o = ask; closeAsk(); suggest(o); return; }
   if(t.dataset.askMeal){ ask.meal = t.dataset.askMeal; renderAsk(); return; }
   if(t.dataset.askWho){ const id = t.dataset.askWho; ask.who = ask.who.includes(id) ? ask.who.filter(x=>x!==id) : [...ask.who, id]; renderAsk(); return; }
   if(t.dataset.askPref){ const id = t.dataset.askPref; ask.prefs = ask.prefs.includes(id) ? ask.prefs.filter(x=>x!==id) : [...ask.prefs, id]; renderAsk(); return; }
+  if(t.dataset.askMain){ const id = t.dataset.askMain; ask.main = ask.main.includes(id) ? ask.main.filter(x=>x!==id) : [...ask.main, id]; renderAsk(); return; }
   if(t.dataset.askCount){ ask.count = +t.dataset.askCount; S.prefs.count = ask.count; persist(); renderAsk(); return; }
   if(t.dataset.member){ go('profile','member',t.dataset.member); return; }
   if(t.dataset.memberedit){ go('profile','memberEdit',t.dataset.memberedit); return; }
