@@ -123,6 +123,11 @@
   .stat-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
   .stat .k{color:var(--ink-soft);font-size:15px;}
   .stat .v{font-size:24px;line-height:1;margin-top:3px;}
+  .serve-row{display:flex;align-items:center;justify-content:center;gap:7px;margin-top:2px;}
+  .serve-btn{width:27px;height:27px;flex:none;border:2px solid var(--line);background:var(--card);
+    filter:url(#wobble);border-radius:50%;font-family:inherit;font-size:19px;line-height:1;color:var(--ink);
+    cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;}
+  .serve-btn:active{background:var(--card-2);}
 
   .step{display:flex;gap:12px;padding:11px 0;border-bottom:1.5px solid var(--line);}
   .step:last-child{border-bottom:none;}
@@ -492,6 +497,58 @@ let picked = new Set();   /* welke voorstellen aangevinkt staan om te bewaren */
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
 
+/* ---------------- hoeveelheden lezen, schalen en optellen ----------------
+   Gebruikt voor het omrekenen van porties en voor het samenvoegen van
+   dezelfde ingrediënten op de boodschappenlijst.                          */
+const UNITS = ['g','gr','gram','kg','ml','cl','dl','l','liter','el','tl','eetlepel','theelepel',
+  'teen','tenen','stuk','stuks','blik','blikje','pak','pakje','bosje','plak','plakken','snufje','snufjes'];
+
+/* 1,5 → "1,5"  ·  2,0 → "2" */
+function fmtNum(n){
+  const r = Math.round(n*100)/100;
+  if(Math.abs(r - Math.round(r)) < 0.01) return String(Math.round(r));
+  return String(Math.round(r*10)/10).replace('.', ',');
+}
+
+/* "300 g pasta" → {qty:300, unit:'g', name:'pasta'} · "olijfolie" → {qty:null,…} */
+function parseIng(text){
+  const raw = String(text).trim();
+  const m = raw.match(/^(\d+(?:[.,]\d+)?)(?:\s*\/\s*(\d+))?\s*(.*)$/);
+  if(!m) return {qty:null, unit:'', name:raw};
+  let qty = parseFloat(m[1].replace(',', '.'));
+  if(m[2]) qty = qty / parseFloat(m[2]);
+  let rest = (m[3]||'').trim(), unit = '';
+  const w = rest.split(/\s+/);
+  if(w.length > 1 && UNITS.includes(w[0].toLowerCase().replace(/\.$/,''))){
+    unit = w[0].toLowerCase().replace(/\.$/,'');
+    rest = w.slice(1).join(' ');
+  }
+  return {qty, unit, name:rest.trim()};
+}
+function fmtIng(qty, unit, name){
+  if(qty == null) return name;
+  return `${fmtNum(qty)}${unit ? ' '+unit : ''} ${name}`.trim();
+}
+/* meervoud licht gladstrijken zodat 'courgettes' en 'courgette' samenvallen */
+function normName(n){
+  let x = String(n).toLowerCase().trim().replace(/\s+/g,' ');
+  if(x.length > 4 && x.endsWith('s')) x = x.slice(0,-1);
+  return x;
+}
+function ingKey(text){
+  const p = parseIng(text);
+  return normName(p.name) + '|' + p.unit;
+}
+/* schaalt alleen het getal vooraan; regels zonder getal blijven ongemoeid */
+function scaleIng(txt, factor){
+  if(!factor || factor === 1) return txt;
+  return String(txt).replace(/^\s*(\d+(?:[.,]\d+)?)(?:\s*\/\s*(\d+))?/, (m, a, b) => {
+    let v = parseFloat(a.replace(',', '.'));
+    if(b) v = v / parseFloat(b);
+    return fmtNum(v * factor);
+  });
+}
+
 function seed(){
   return [
     {id:uid(), name:'Pasta met courgette en citroen', type:'dinner', mins:20, serves:4, level:'easy',
@@ -549,7 +606,9 @@ function toast(msg){
   clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('on'), 2400);
 }
 
+let viewServes = null;   /* tijdelijk aangepast aantal personen op het receptdetail */
 function go(tab, view=null, arg=null){
+  viewServes = null;
   S.tab = tab; S.view = view; S.arg = arg;
   render(); $('screen').scrollTop = 0;
 }
@@ -635,6 +694,9 @@ function viewRecipes(){
 function viewDetail(id){
   const r = S.recipes.find(x=>x.id===id);
   if(!r) return viewRecipes();
+  const baseServes = Math.max(1, +r.serves || 1);
+  const serves = Math.max(1, viewServes || baseServes);
+  const factor = serves / baseServes;
   return `
     <div class="detail-top">
       <button class="back" data-tab="recipes" aria-label="Terug">${ic('back','')}</button>
@@ -645,18 +707,24 @@ function viewDetail(id){
     <div class="sketch card" style="background:var(${typeOf(r.type).v})">
       <div class="stat-grid">
         <div class="stat"><div class="k">Tijd</div><div class="v hand">${r.mins}′</div></div>
-        <div class="stat"><div class="k">Personen</div><div class="v hand">${r.serves}</div></div>
+        <div class="stat"><div class="k">Personen</div>
+          <div class="serve-row">
+            <button class="serve-btn" data-serves="-1" aria-label="Minder personen">−</button>
+            <span class="v hand">${serves}</span>
+            <button class="serve-btn" data-serves="1" aria-label="Meer personen">+</button>
+          </div>
+        </div>
         <div class="stat"><div class="k">Niveau</div><div class="v hand">${LEVEL_NL[r.level]||r.level}</div></div>
       </div>
     </div>
     <div class="eyebrow"><span>Ingrediënten</span><button data-addlist="${r.id}">op lijst</button></div>
-    <div class="muted" style="font-size:14px;margin:0 4px 8px">Vink aan wat je al in huis hebt — dat gaat niet naar je lijst.</div>
+    <div class="muted" style="font-size:14px;margin:0 4px 8px">Vink aan wat je al in huis hebt — dat gaat niet naar je lijst.${factor!==1?` Hoeveelheden omgerekend van ${baseServes} naar ${serves} personen.`:''}</div>
     <div class="sketch card">
       ${r.ingredients.map((i,ix)=>{
         const have = (r.have||[]).includes(i);
         return `<div class="step" style="align-items:center">
           <button class="tickbox ${have?'on':''}" data-have="${r.id}:${ix}" aria-label="Al in huis">${ic('check','')}</button>
-          <span class="tx ${have?'done':''}">${esc(i)}</span>
+          <span class="tx ${have?'done':''}">${esc(scaleIng(i, factor))}</span>
         </div>`;
       }).join('')}
     </div>
@@ -1256,8 +1324,18 @@ async function persist(){ await saveData(pack()); }
 
 function addToList(items){
   items.forEach(t=>{
-    const clean = t.trim(); if(!clean) return;
-    if(S.shopping.some(i=>i.text.toLowerCase()===clean.toLowerCase())) return;
+    const clean = String(t).trim(); if(!clean) return;
+    const p = parseIng(clean);
+    const key = normName(p.name) + '|' + p.unit;
+    /* zelfde ingrediënt al open op de lijst? tel de hoeveelheid erbij op */
+    const hit = S.shopping.find(i => !i.done && ingKey(i.text) === key);
+    if(hit){
+      const h = parseIng(hit.text);
+      if(h.qty != null && p.qty != null){
+        hit.text = fmtIng(h.qty + p.qty, h.unit || p.unit, h.name || p.name);
+      }
+      return;   /* zonder hoeveelheid: staat er al, niets toe te voegen */
+    }
     S.shopping.push({id:uid(), text:clean, done:false});
   });
   persist();
@@ -1269,7 +1347,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-pick],#picks-save');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-pick],#picks-save');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
@@ -1311,6 +1389,12 @@ document.addEventListener('click', async (e)=>{
     await persist(); go('recipes'); toast(`${r?r.name:'Recept'} verwijderd`);
     return;
   }
+  if(t.dataset.serves){
+    const r = S.recipes.find(x=>x.id===S.arg);
+    const base = Math.max(1, +(r&&r.serves) || 1);
+    viewServes = Math.min(50, Math.max(1, (viewServes || base) + (+t.dataset.serves)));
+    render(); return;
+  }
   if(t.dataset.have){
     const c = t.dataset.have.lastIndexOf(':');
     const rid = t.dataset.have.slice(0,c), ix = +t.dataset.have.slice(c+1);
@@ -1322,7 +1406,8 @@ document.addEventListener('click', async (e)=>{
   }
   if(t.dataset.addlist){
     const r = S.recipes.find(x=>x.id===t.dataset.addlist);
-    const need = r.ingredients.filter(i=>!(r.have||[]).includes(i));
+    const f = viewServes ? (viewServes / Math.max(1, +r.serves || 1)) : 1;
+    const need = r.ingredients.filter(i=>!(r.have||[]).includes(i)).map(i=>scaleIng(i, f));
     if(!need.length){ toast('Alles is al in huis'); return; }
     addToList(need); toast(`${need.length} op je lijst gezet`); return;
   }
