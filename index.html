@@ -1068,14 +1068,14 @@ function renderAsk(){
     <div class="field"><label>Wie eet mee</label>
       <div class="chips">${(S.family||[]).length ? S.family.map(m=>`<button class="chip ${ask.who.includes(m.id)?'on':''}" data-ask-who="${m.id}">${esc(m.name)}</button>`).join('') : `<span class="muted" style="font-size:16px">Nog geen gezinsleden</span>`}</div>
     </div>
+    <div class="field"><label for="ask-extra">Waar heb je zin in?</label>
+      <input class="inp" id="ask-extra" placeholder="bijv. iets met pasta, zonder saus" value="${esc(ask.extra||'')}">
+    </div>
     <div class="field"><label>Voorkeur</label>
       <div class="chips">${PREF_FLAGS.map(f=>`<button class="chip ${ask.prefs.includes(f.id)?'on':''}" data-ask-pref="${f.id}">${f.label}</button>`).join('')}</div>
     </div>
     <div class="field"><label>Hoofdingrediënt</label>
       <div class="chips">${MAIN_ING.map(m=>`<button class="chip ${ask.main.includes(m.id)?'on':''}" data-ask-main="${m.id}">${m.label}</button>`).join('')}</div>
-    </div>
-    <div class="field"><label for="ask-extra">Extra wens (optioneel)</label>
-      <input class="inp" id="ask-extra" placeholder="bijv. zonder saus" value="${esc(ask.extra||'')}">
     </div>
     <div class="field"><label>Hoeveel recepten</label>
       <div class="chips">${[1,2,3,4,5].map(n=>`<button class="chip ${ask.count===n?'on':''}" data-ask-count="${n}">${n}</button>`).join('')}</div>
