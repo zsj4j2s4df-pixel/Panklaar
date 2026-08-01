@@ -613,9 +613,10 @@ function toast(msg){
   clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('on'), 2400);
 }
 
-let viewServes = null;   /* tijdelijk aangepast aantal personen op het receptdetail */
+let viewServes = null;    /* tijdelijk aangepast aantal personen op het receptdetail */
+let confirmWipe = false;  /* tweede tik nodig voor 'lijst leegmaken' */
 function go(tab, view=null, arg=null){
-  viewServes = null;
+  viewServes = null; confirmWipe = false;
   S.tab = tab; S.view = view; S.arg = arg;
   render(); $('screen').scrollTop = 0;
 }
@@ -830,6 +831,9 @@ function viewShopping(){
         <button class="tickbox on" data-tick="${i.id}" aria-label="Vinkje weg">${ic('check','')}</button>
         <span class="grow done">${esc(i.text)}</span>
       </div>`).join('')}
+    ${S.shopping.length ? `<button class="btn ${confirmWipe?'fill':'ghost'} wide" id="shop-wipe" style="margin-top:14px">
+      ${ic('trash','')} ${confirmWipe ? 'Zeker weten? Tik nogmaals' : 'Lijst leegmaken'}
+    </button>` : ''}
   `;
 }
 
@@ -1372,7 +1376,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-pick],#picks-save');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-pick],#picks-save');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
@@ -1447,6 +1451,13 @@ document.addEventListener('click', async (e)=>{
     addToList([v]); render(); return;
   }
   if(t.id === 'shop-clear'){ S.shopping = S.shopping.filter(i=>!i.done); await persist(); render(); return; }
+  if(t.id === 'shop-wipe'){
+    if(!confirmWipe){ confirmWipe = true; render(); return; }
+    const n = S.shopping.length;
+    S.shopping = []; confirmWipe = false;
+    await persist(); render(); toast(`${n} item${n===1?'':'s'} gewist`);
+    return;
+  }
 
   if(t.id === 'plan-shop'){
     const all = [];
