@@ -505,7 +505,7 @@ let S = {
   recipes:[], shopping:[], pantry:[], plan:{}, theme:'auto', family:[], equip:[], prefs:{veg:7,fish:1,meat:3,flags:[]}, timers:[],
   tab:'home', view:null, arg:null, filter:'all'
 };
-let famOpen = false, prefOpen = false, equipOpen = false, pantOpen = false, ask = null, suggestions = [];
+let helpOpen = false, famOpen = false, prefOpen = false, equipOpen = false, pantOpen = false, ask = null, suggestions = [];
 let picked = new Set();   /* welke voorstellen aangevinkt staan om te bewaren */
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
@@ -938,6 +938,43 @@ function viewProfile(){
   return `
     <h1 class="title hand">Jouw keuken</h1>
     <p class="subtitle">Wat er in huis is, en hoe alles eruitziet.</p>
+    <div class="sketch card" data-help="1" style="cursor:pointer;margin-bottom:14px">
+      <div class="row">
+        <div class="grow"><div class="name hand">Uitleg</div><div class="meta">Hoe werkt Panklaar &amp; de AI-sleutel</div></div>
+        <span class="fam-chev ${helpOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
+      </div>
+    </div>
+    ${helpOpen ? `
+    <div class="sketch card">
+      <div style="font-size:17px;line-height:1.5">
+        Panklaar bewaart je recepten en bedenkt er nieuwe bij die passen bij wie er mee-eet.
+        Boodschappenlijst, weekplanner en voorraad zitten erin. Alles blijft op je eigen apparaat.
+      </div>
+    </div>
+    <div class="eyebrow"><span>Zo begin je</span></div>
+    <div class="sketch card">
+      <div class="step"><span class="n hand">1</span><span class="tx">Vul je huisgenoten in bij <span class="hand">Gezinsleden</span>. De app houdt dan rekening met wat ieder wel en niet mag eten.</span></div>
+      <div class="step"><span class="n hand">2</span><span class="tx">Zet aan wat je hebt bij <span class="hand">Keukenapparatuur</span>, zodat recepten daarop aansluiten.</span></div>
+      <div class="step"><span class="n hand">3</span><span class="tx">Wil je recepten laten bedenken? Dan heb je een AI-sleutel nodig — zie hieronder.</span></div>
+    </div>
+    <div class="eyebrow"><span>AI-sleutel stap voor stap</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">
+      Alleen nodig voor <span class="hand">Wat zullen we koken?</span> en de voorraad-foto. Zonder sleutel werkt de rest van de app gewoon.
+    </div>
+    <div class="sketch card">
+      <div class="step"><span class="n hand">1</span><span class="tx">Ga naar <span class="hand">console.anthropic.com</span> en log in, of maak een account aan.</span></div>
+      <div class="step"><span class="n hand">2</span><span class="tx">Zet tegoed op je account bij <span class="hand">Billing</span>. Let op: een Claude-abonnement (Pro of Max) telt hier niet voor mee — de API werkt met apart tegoed.</span></div>
+      <div class="step"><span class="n hand">3</span><span class="tx">Open <span class="hand">API Keys</span> en klik op <span class="hand">Create Key</span>.</span></div>
+      <div class="step"><span class="n hand">4</span><span class="tx">Kopieer de sleutel — die begint met <span class="hand">sk-ant-api…</span> en is maar één keer te zien.</span></div>
+      <div class="step"><span class="n hand">5</span><span class="tx">Plak hem hieronder bij <span class="hand">AI-sleutel</span> en tik op <span class="hand">Sleutel testen</span>.</span></div>
+    </div>
+    <div class="eyebrow"><span>Goed om te weten</span></div>
+    <div class="sketch soft card" style="margin-bottom:20px">
+      <div class="step"><span class="n">·</span><span class="tx">De sleutel blijft op dit apparaat en gaat nergens anders heen.</span></div>
+      <div class="step"><span class="n">·</span><span class="tx">Elke website bewaart z'n eigen sleutel. Gebruik je Panklaar ook op een andere telefoon, plak hem daar dan opnieuw.</span></div>
+      <div class="step"><span class="n">·</span><span class="tx">De kosten zijn klein: grofweg een paar cent per keer dat je recepten laat bedenken.</span></div>
+      <div class="step"><span class="n">·</span><span class="tx">De voedingsregels bij gezinsleden volgen het Voedingscentrum, maar dit is geen medisch advies — overleg bij twijfel met je verloskundige, huisarts of het consultatiebureau.</span></div>
+    </div>` : ''}
     <div class="sketch card" data-fam="toggle" style="cursor:pointer;margin-bottom:14px">
       <div class="row">
         <div class="grow">
@@ -1463,7 +1500,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
@@ -1577,6 +1614,7 @@ document.addEventListener('click', async (e)=>{
     render(); return;
   }
 
+  if(t.dataset.help){ helpOpen = !helpOpen; render(); return; }
   if(t.dataset.fam === 'toggle'){ famOpen = !famOpen; render(); return; }
   if(t.dataset.prefmenu){ prefOpen = !prefOpen; render(); return; }
   if(t.dataset.equipmenu){ equipOpen = !equipOpen; render(); return; }

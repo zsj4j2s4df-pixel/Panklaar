@@ -25,8 +25,34 @@ het apparaat (IndexedDB).
 
 ## AI-functies
 
-De AI-suggesties en de voorraad-foto gebruiken de Anthropic API. Plak je eigen
-API-sleutel in de app (tab **Jij → AI-sleutel**); die blijft alleen op je toestel.
+De AI-suggesties (**Wat zullen we koken?**) en de voorraad-foto gebruiken de
+Anthropic API en vragen om je eigen API-sleutel. Zonder sleutel werkt de rest
+van de app gewoon: recepten bijhouden, koken met timers, boodschappenlijst,
+weekplanner en gezinsleden.
+
+### AI-sleutel stap voor stap
+
+1. Ga naar [console.anthropic.com](https://console.anthropic.com) en log in, of
+   maak een account aan.
+2. Zet tegoed op je account bij **Billing**. Let op: een Claude-abonnement (Pro
+   of Max) telt hier niet voor mee — de API werkt met apart tegoed.
+3. Open **API Keys** en klik op **Create Key**.
+4. Kopieer de sleutel. Die begint met `sk-ant-api…` en is maar één keer te zien.
+5. Plak hem in de app bij **Jij → AI-sleutel** en tik op **Sleutel testen**.
+
+Goed om te weten:
+
+- De sleutel blijft in de opslag van je eigen browser en gaat nergens anders
+  heen. Hij staat niet in de code en niet in een back-up.
+- Elke website bewaart z'n eigen sleutel. Gebruik je de app ook op een andere
+  telefoon of laptop, plak hem daar dan opnieuw.
+- De kosten zijn klein: grofweg een paar cent per keer dat je recepten laat
+  bedenken.
+- De voedingsregels bij gezinsleden volgen publieke richtlijnen van het
+  Voedingscentrum (aangevuld met RIVM/WHO). Het is geen medisch advies —
+  overleg bij twijfel met je verloskundige, huisarts of het consultatiebureau.
+
+Dezelfde uitleg staat in de app zelf onder **Jij → Uitleg**.
 
 ## Draaien
 
