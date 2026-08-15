@@ -349,10 +349,16 @@ async function aiRequest(body){
 /* het antwoord kan bij zoeken wat tekst rond de JSON hebben; pak het blok eruit */
 function extractJson(txt){
   const t = String(txt).replace(/```json|```/g,'').trim();
-  const a = t.indexOf('['), b = t.lastIndexOf(']');
-  if(a >= 0 && b > a) return t.slice(a, b+1);
-  const c = t.indexOf('{'), d = t.lastIndexOf('}');
-  if(c >= 0 && d > c) return t.slice(c, d+1);
+  const a = t.indexOf('['), c = t.indexOf('{');
+  /* wat als eerste begint bepaalt of het een lijst of één recept is */
+  if(a >= 0 && (c < 0 || a < c)){
+    const b = t.lastIndexOf(']');
+    if(b > a) return t.slice(a, b+1);
+  }
+  if(c >= 0){
+    const d = t.lastIndexOf('}');
+    if(d > c) return t.slice(c, d+1);
+  }
   return t;
 }
 
@@ -537,6 +543,7 @@ let S = {
   recipes:[], shopping:[], pantry:[], plan:{}, theme:'auto', family:[], equip:[], prefs:{veg:7,fish:1,meat:3,flags:[]}, timers:[],
   tab:'home', view:null, arg:null, filter:'all'
 };
+let impText = '', impTweak = '';
 let helpOpen = false, famOpen = false, prefOpen = false, equipOpen = false, pantOpen = false, ask = null, suggestions = [];
 let picked = new Set();   /* welke voorstellen aangevinkt staan om te bewaren */
 
@@ -622,7 +629,8 @@ const I = {
   pot:'<path d="M5.3 9.4h13.4v5.2c0 2.5-2 4.4-4.5 4.4H9.8c-2.5 0-4.5-2-4.5-4.4V9.5zM5.2 11.2H3.4M18.8 11.1h1.8M9.4 6.6c0-1.2 1.2-1.3 1.2-2.5M13.4 6.5c0-1.2 1.2-1.3 1.2-2.5"/>',
   chev:'<path d="M6.2 9 12 14.6 17.8 9"/>',
   camera:'<path d="M4.4 8.5h3l1.4-2.2h6.4l1.4 2.2h3v10.1H4.3V8.6M14.6 12.4c1 1.4.4 3.3-1.2 4-1.7.5-3.4-.7-3.5-2.5-.1-1.5 1.2-2.9 2.8-2.7 .9.1 1.6.6 2 1.3"/>',
-  save:'<path d="M6.5 4.6h11v14.8l-5.5-3.7-5.5 3.7z"/>'
+  save:'<path d="M6.5 4.6h11v14.8l-5.5-3.7-5.5 3.7z"/>',
+  inbox:'<path d="M5.4 4.6h13.2v14.8H5.5V4.7M12 7.4v6.4M9.1 11.1 12 14.1l2.9-3"/>'
 };
 const ic = (n, cls='navic') => `<svg class="${cls}" viewBox="0 0 24 24">${I[n]}</svg>`;
 
@@ -749,6 +757,7 @@ function render(){
                         : S.view === 'edit'       ? viewEdit(S.arg)
                         : S.view === 'member'     ? viewMember(S.arg)
                         : S.view === 'memberEdit' ? viewMemberEdit(S.arg)
+                        : S.view === 'import'     ? viewImport()
                         : S.view === 'picks'      ? viewPicks()
                         : S.view === 'cand'       ? viewCandidate(S.arg)
                         : v();
@@ -817,6 +826,7 @@ function viewRecipes(){
         <p>Nog niks hier. Voeg je eerste recept toe, dan staat het op deze plank.</p>
       </div>`}
     <button class="btn wide" data-go="new" style="margin-top:6px">${ic('plus','')} Recept toevoegen</button>
+    <button class="btn wide" data-go="import" style="margin-top:10px">${ic('inbox','')} Recept inladen</button>
   `;
 }
 
@@ -1321,6 +1331,75 @@ async function scanPantry(file){
   }
 }
 
+function viewImport(){
+  return `
+    <div class="detail-top">
+      <button class="back" data-tab="recipes" aria-label="Terug">${ic('back','')}</button>
+      <span class="h hand">Recept inladen</span>
+      <span style="width:28px"></span>
+    </div>
+    <p class="subtitle" style="margin-top:6px">Plak een recept dat je ergens tegenkwam — de hele tekst of alleen de link. Ik zet het om naar een recept zoals de rest in je kast.</p>
+    <div class="field">
+      <label for="imp-in">Recept of link</label>
+      <textarea class="inp" id="imp-in" rows="8" placeholder="https://…&#10;of plak hier de tekst van het recept">${esc(impText)}</textarea>
+    </div>
+    <div class="field">
+      <label for="imp-tweak">Wil je er iets aan veranderen? (optioneel)</label>
+      <input class="inp" id="imp-tweak" value="${esc(impTweak)}" placeholder="met kip in plaats van zalm">
+    </div>
+    <button class="btn fill wide" id="imp-go">${ic('inbox','')} Inladen</button>
+    ${BOARD_KNIFE_DRAWING}
+  `;
+}
+
+/* het recept ophalen of uit de geplakte tekst vissen, en omzetten */
+async function importRecipe(){
+  const raw = impText.trim();
+  if(!raw){ toast('Plak eerst een recept of een link'); return; }
+  const tweak = impTweak.trim();
+  const isLink = /^https?:\/\//i.test(raw) || /^www\./i.test(raw);
+  const tweakNote = tweak ? ` Pas het recept aan volgens deze wens en verwerk dat overal — in de naam, de ingrediënten én de stappen: ${tweak}.` : '';
+  const tipsNote = aiOn('tips') ? ' Geef in "tips" twee tot vier korte suggesties voor extra ingrediënten of kruiden.' : '';
+  const uitlegNote = aiOn('uitleg') ? ' Leg in "uitleg" in twee tot vier zinnen uit hoe de belangrijkste techniek werkt en waarom je het zo doet.' : '';
+  const extraFields = `${aiOn('tips') ? ',"tips":["..."]' : ''}${aiOn('uitleg') ? ',"uitleg":"..."' : ''}`;
+  $('screen').innerHTML = `<h1 class="title hand">Even lezen…</h1>
+    <p class="subtitle">${isLink ? 'Ik haal het recept op en schrijf het over.' : 'Ik schrijf het recept over in jouw vorm.'}</p>${PAN_DRAWING}`;
+  const prompt = `Zet het onderstaande recept om naar mijn eigen receptvorm.
+${isLink
+  ? 'Het is een link. Open hem, of zoek het recept op als de pagina niet te lezen is, en gebruik wat er echt in staat.'
+  : 'Het is geplakte tekst. Houd je aan wat er staat; vul alleen aan waar iets duidelijk ontbreekt.'}
+Blijf trouw aan het origineel: dezelfde ingrediënten en dezelfde volgorde, tenzij ik hieronder om een wijziging vraag.${tweakNote}
+Schrijf in het Nederlands, tutoyeren. Maak van elke stap één korte, duidelijke zin met de tijden erin, zodat ik hem tijdens het koken kan volgen. Zet hoeveelheden in het metrieke stelsel (g, ml, el, tl).${tipsNote}${uitlegNote}
+${equipPrompt()}
+Recept:
+${raw}
+
+Antwoord met UITSLUITEND geldige JSON, geen markdown:
+{"name":"","type":"dinner","mins":30,"serves":2,"level":"easy","ingredients":["..."],"steps":["..."]${extraFields}}
+"type" is een van: ${TYPES.map(t=>t.id).join(', ')}. "level" is easy, medium of hard.`;
+  try{
+    const req = {model:AI_MODEL, max_tokens:4000, messages:[{role:'user',content:prompt}]};
+    if(isLink || aiOn('search')) req.tools = [{type:'web_search_20260209', name:'web_search', max_uses:3}];
+    const txt = await aiRequest(req);
+    let r = JSON.parse(extractJson(txt));
+    if(Array.isArray(r)) r = r[0];
+    if(!r || !r.name) throw new Error('Ik kon er geen recept uit halen. Plak anders de hele tekst van het recept.');
+    suggestions = [{ ...r, id:'c'+uid() }];
+    picked = new Set(suggestions.map(x=>x.id));
+    go('recipes','cand', suggestions[0].id);
+  }catch(e){
+    lastAiError = e.message || String(e);
+    const noKey = !aiKey();
+    $('screen').innerHTML = `<h1 class="title hand">${noKey ? 'AI-sleutel nodig' : 'Niet gelukt'}</h1>
+      <p class="subtitle">${noKey
+        ? 'Om een recept in te laden heb ik je Anthropic API-sleutel nodig. Die vul je in bij Jij → AI-sleutel.'
+        : 'De AI-dienst gaf deze melding terug:'}</p>
+      ${noKey ? '' : `<div class="sketch card"><div class="tx" style="font-size:17px;line-height:1.45">${esc(lastAiError)}</div></div>`}
+      ${noKey ? `<button class="btn fill wide" data-tab="profile">${ic('user','')} Naar AI-sleutel</button>` : ''}
+      <button class="btn ghost wide" data-go="import" style="margin-top:10px">Terug naar inladen</button>`;
+  }
+}
+
 /* tips en uitleg onder de stappen, alleen als ze er zijn */
 function extraBlocks(r){
   return `${Array.isArray(r.tips)&&r.tips.length ? `
@@ -1609,7 +1688,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
@@ -1618,6 +1697,12 @@ document.addEventListener('click', async (e)=>{
   if(t.dataset.go === 'edit'){ go('recipes','edit',t.dataset.id); return; }
   if(t.dataset.go === 'suggest'){ openAsk(); return; }
   if(t.dataset.go === 'picks'){ go('recipes','picks'); return; }
+  if(t.dataset.go === 'import'){ go('recipes','import'); return; }
+  if(t.id === 'imp-go'){
+    impText = ($('imp-in') ? $('imp-in').value : '').trim();
+    impTweak = ($('imp-tweak') ? $('imp-tweak').value : '').trim();
+    await importRecipe(); return;
+  }
   if(t.dataset.filter){ S.filter = t.dataset.filter; render(); return; }
 
   if(t.dataset.type){ document.querySelectorAll('#f-type .chip').forEach(c=>c.classList.toggle('on', c===t)); return; }

@@ -20,7 +20,11 @@ het apparaat (IndexedDB).
 - **Wat heb ik in huis**: voorraad aanvullen door een **foto** te maken of te typen.
 - **Wat zullen we koken?**: een korte pop-up (maaltijd, wie eet mee, voorkeuren)
   die met de AI 1–3 recepten voorstelt om uit te kiezen.
-- **Boodschappenlijst** en **weekplanner**.
+- **Recept inladen**: plak een recept dat je ergens tegenkwam (de tekst of alleen
+  de link) en laat het omzetten naar de vorm van de app, eventueel met een
+  wijziging als "met kip in plaats van zalm".
+- **Boodschappenlijst** (gegroepeerd per gerecht, hoeveelheden worden bij elkaar
+  opgeteld) en **weekplanner**.
 - Installeerbare **PWA**, werkt offline (behalve de AI-functies).
 
 ## AI-functies
