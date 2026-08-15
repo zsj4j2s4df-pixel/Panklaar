@@ -163,6 +163,9 @@
   .cook-body::-webkit-scrollbar{display:none;}
   .cook-n{color:var(--ink-soft);font-size:18px;}
   .cook-tx{font-size:27px;line-height:1.35;margin-top:10px;}
+  .cook-amts{display:flex;flex-wrap:wrap;gap:6px 10px;margin-top:12px;}
+  .cook-amts span{font-size:17px;color:var(--ink-soft);background:var(--card);border:1.5px solid var(--line);
+    filter:url(#wobble);border-radius:12px;padding:3px 10px;}
   .cook-peek{margin-top:24px;padding-top:14px;border-top:2px dashed var(--line);opacity:.55;}
   .cook-peek .lbl{font-size:14px;letter-spacing:.6px;text-transform:uppercase;color:var(--ink-soft);margin-bottom:5px;}
   .cook-peek .ptx{font-size:19px;line-height:1.32;color:var(--ink-soft);}
@@ -184,6 +187,16 @@
     gap:10px;justify-content:center;}
   .timer{margin-top:22px;padding:16px;text-align:center;}
   .timer .clock{font-size:52px;line-height:1;}
+  .cook-ask{display:flex;gap:8px;margin-top:12px;}
+  .cook-ask .inp{flex:1;font-size:17px;padding:10px 14px;}
+  .cook-ask .btn{flex:none;padding:10px 14px;}
+  .cook-ans{margin-top:12px;background:var(--card);border:2px solid var(--line);filter:url(#wobble);
+    border-radius:16px;padding:12px 14px;position:relative;}
+  .cook-ans .q{font-size:14px;color:var(--ink-soft);margin-bottom:4px;padding-right:22px;}
+  .cook-ans .a{font-size:18px;line-height:1.4;white-space:pre-wrap;}
+  .cook-ans .src{font-size:13px;color:var(--ink-soft);margin-top:6px;}
+  .cook-ans .x{position:absolute;top:6px;right:8px;background:none;border:none;font-family:inherit;
+    font-size:19px;line-height:1;color:var(--ink-soft);cursor:pointer;}
   .cook-nav{display:flex;gap:10px;margin-top:14px;}
   .cook-nav .btn{flex:1;justify-content:center;display:flex;}
 
@@ -206,6 +219,14 @@
   .sheet-card{width:100%;max-height:90%;overflow-y:auto;background:var(--paper);border-radius:26px 26px 0 0;
     border:2px solid var(--ink);border-bottom:none;padding:16px 20px 26px;}
   .sheet-card::-webkit-scrollbar{display:none;}
+  .care-note{border-left:3px solid var(--ink-soft);padding-left:12px;margin:2px 0 12px;}
+  .care-note .w{font-size:17px;line-height:1.4;}
+  .care-note .f{font-size:16px;line-height:1.4;color:var(--ink-soft);margin-top:3px;}
+  .care-note .who{font-size:13px;letter-spacing:.5px;text-transform:uppercase;color:var(--ink-soft);margin-bottom:3px;}
+  .cook-care{margin-top:14px;background:var(--accent-soft);border:2px solid var(--ink);filter:url(#wobble);
+    border-radius:16px;padding:10px 14px;}
+  .cook-care .w{font-size:16px;line-height:1.35;}
+  .cook-care .f{font-size:16px;line-height:1.35;margin-top:4px;}
   .pref-row{display:flex;align-items:center;gap:12px;margin-bottom:14px;}
   .pref-row>span:first-child{width:78px;flex:none;font-size:19px;}
   .pref-val{width:46px;text-align:right;flex:none;font-size:21px;}
@@ -243,6 +264,7 @@
       <div id="cookTimerAdd"></div>
       <div class="cook-peek" id="cookPeek" style="display:none"></div>
     </div>
+    <div id="cookAsk"></div>
     <div class="cook-nav">
       <button class="btn" id="cookPrev">Terug</button>
       <button class="btn fill" id="cookNext">Volgende</button>
@@ -250,6 +272,10 @@
   </div>
 
   <div class="sheet" id="ask">
+    <div class="sheet-card"></div>
+  </div>
+
+  <div class="sheet" id="care">
     <div class="sheet-card"></div>
   </div>
 
@@ -457,6 +483,76 @@ const STAGE_RULES = {
     note:'' },
   none:{ src:'', avoid:[], limit:[], ok:[], note:'Geen bijzondere voedingsregels.' }
 };
+
+/* Waar een recept kan botsen met de situatie van wie mee-eet. De regels
+   komen uit dezelfde richtlijnen als hierboven (Voedingscentrum/RIVM/WHO). */
+const CARE_CHECKS = [
+  {id:'doorbakken', pat:'rood vlees|rosé|rose gebakken|biefstuk|hamburger|gehakt|tartaar|carpaccio|filet américain|rauwe ham|steak|lamsvlees',
+   stages:['pregnant'],
+   warn:'Vlees dat niet helemaal doorbakken is, wordt tijdens de zwangerschap afgeraden (toxoplasmose).',
+   fix:'Bak het vlees helemaal door — geen rode of rosé kern, kern minstens 70 °C.'},
+  {id:'rauwevis', pat:'rauwe vis|sushi|sashimi|gerookte zalm|gerookte vis|gerookte forel|haring|oester|mosselen rauw',
+   stages:['pregnant','infant_6_12','toddler_1_3'],
+   warn:'Rauwe of gerookte vis is af te raden (listeria).',
+   fix:'Verhit de vis goed door, of kies verse vis die je gaar bakt.'},
+  {id:'kaas', pat:'brie|camembert|blauwader|gorgonzola|roquefort|rauwmelks|rauwe melk|feta',
+   stages:['pregnant','infant_6_12','toddler_1_3'],
+   warn:'Zachte schimmelkaas en rauwmelkse kaas kunnen listeria bevatten.',
+   fix:'Neem een gepasteuriseerde of harde kaas, of verhit de kaas goed mee in het gerecht.'},
+  {id:'rauwei', pat:'rauw ei|rauwe eieren|mayonaise|tiramisu|mousse|lopende dooier|zachtgekookt ei',
+   stages:['pregnant','infant_6_12','toddler_1_3','child_4_12'],
+   warn:'Rauw of half gegaard ei wordt afgeraden (salmonella).',
+   fix:'Gaar het ei helemaal door, of gebruik gepasteuriseerd ei.'},
+  {id:'lever', pat:'lever|paté|leverworst',
+   stages:['pregnant'],
+   warn:'Lever en leverproducten bevatten veel vitamine A — niet tijdens de zwangerschap.',
+   fix:'Laat de lever weg of vervang hem door gewoon vlees of kip.'},
+  {id:'alcohol', pat:'alcohol|witte wijn|rode wijn|wijn|bier|cognac|rum|likeur|sherry|port|calvados',
+   stages:['pregnant','breastfeeding','infant_6_12','toddler_1_3','child_4_12'],
+   warn:'Er zit alcohol in dit recept.',
+   fix:'Vervang de drank door (extra) bouillon of water, of laat de alcohol volledig verdampen voor je verdergaat.'},
+  {id:'zout', pat:'zout|zeezout|bouillonblokje|bouillonblokjes|sojasaus|ketjap|maggi',
+   stages:['infant_6_12','toddler_1_3'],
+   warn:'Kleine kinderen kunnen weinig zout hebben; voeg voor hen niets extra toe.',
+   fix:'Schep het kinderdeel uit de pan vóór je zout, sojasaus of een bouillonblokje toevoegt, en gebruik zoutarme bouillon.'},
+  {id:'honing', pat:'honing',
+   stages:['infant_6_12'],
+   warn:'Honing mag pas vanaf 12 maanden (botulisme).',
+   fix:'Laat de honing weg in het babydeel, of vervang hem door wat gepureerd fruit.'},
+  {id:'verslikken', pat:'hele noten|noten|pijnboompitten|druiven|kerstomaat|kerstomaatjes|snoeptomaatjes|olijven|popcorn',
+   stages:['infant_6_12','toddler_1_3'],
+   warn:'Hele noten en ronde stukjes geven verslikkingsgevaar bij kleine kinderen.',
+   fix:'Hak ze fijn of snijd ze in de lengte door voor het kinderdeel — of laat ze daar weg.'},
+  {id:'roofvis', pat:'tonijn|zwaardvis|paling|haai|koningsmakreel|marlijn',
+   stages:['pregnant','breastfeeding','infant_6_12','toddler_1_3','child_4_12'],
+   warn:'Roofvis kan kwik bevatten; die eet je beter niet vaak.',
+   fix:'Kies een andere vis, bijvoorbeeld zalm, kabeljauw, forel of koolvis.'},
+  {id:'cafeine', pat:'koffie|espresso|cafeïne|energydrank|zwarte thee',
+   stages:['pregnant','breastfeeding','infant_6_12','toddler_1_3'],
+   warn:'Let op de cafeïne — rond zwangerschap en borstvoeding geldt maximaal ± 200 mg per dag, en voor kleine kinderen niets.',
+   fix:'Gebruik een kleinere hoeveelheid, of kies cafeïnevrij.'},
+  {id:'suiker', pat:'suiker|siroop|stroop|limonadesiroop',
+   stages:['infant_6_12'],
+   warn:'Voor een baby voeg je geen suiker toe.',
+   fix:'Laat de suiker weg in het babydeel; fruit geeft genoeg zoetheid.'}
+];
+
+/* welke punten raken dit recept, gezien wie er mee-eet? */
+function careFindings(r){
+  const fam = (S.family||[]).filter(m=>m.eat);
+  if(!fam.length) return [];
+  const txt = [...(r.ingredients||[]), ...(r.steps||[])].join(' \n ').toLowerCase();
+  const out = [];
+  CARE_CHECKS.forEach(c=>{
+    const who = fam.filter(m=>(m.stages||[]).some(st=>c.stages.includes(st))).map(m=>m.name);
+    if(!who.length) return;
+    const re = new RegExp(`\\b(${c.pat})`, 'i');
+    if(!re.test(txt)) return;
+    const stepIdx = (r.steps||[]).findIndex(st=>re.test(String(st)));
+    out.push({id:c.id, pat:c.pat, who, warn:c.warn, fix:c.fix, stepIdx, on:true});
+  });
+  return out;
+}
 
 /* alle regels van een lid: samengevoegd over zijn situaties */
 function memberRules(m){
@@ -836,6 +932,7 @@ function viewDetail(id){
   const baseServes = Math.max(1, +r.serves || 1);
   const serves = Math.max(1, viewServes || baseServes);
   const factor = serves / baseServes;
+  const V = withTips(r);
   return `
     <div class="detail-top">
       <button class="back" data-tab="recipes" aria-label="Terug">${ic('back','')}</button>
@@ -856,10 +953,19 @@ function viewDetail(id){
         <div class="stat"><div class="k">Niveau</div><div class="v hand">${LEVEL_NL[r.level]||r.level}</div></div>
       </div>
     </div>
+    ${(r.care||[]).length ? `
+    <div class="eyebrow"><span>Let op</span></div>
+    <div class="sketch card">
+      ${r.care.map(c=>`<div class="care-note">
+        <div class="who">Voor ${esc((c.who||[]).join(' en '))}</div>
+        <div class="w">${esc(c.warn)}</div>
+        <div class="f">${esc(c.fix)}</div>
+      </div>`).join('')}
+    </div>` : ''}
     <div class="eyebrow"><span>Ingrediënten</span><button data-addlist="${r.id}">op lijst</button></div>
     <div class="muted" style="font-size:14px;margin:0 4px 8px">Vink aan wat je al in huis hebt — dat gaat niet naar je lijst.${factor!==1?` Hoeveelheden omgerekend van ${baseServes} naar ${serves} personen.`:''}</div>
     <div class="sketch card">
-      ${r.ingredients.map((i,ix)=>{
+      ${V.ingredients.map((i,ix)=>{
         const have = (r.have||[]).includes(i);
         return `<div class="step" style="align-items:center">
           <button class="tickbox ${have?'on':''}" data-have="${r.id}:${ix}" aria-label="Al in huis">${ic('check','')}</button>
@@ -869,9 +975,9 @@ function viewDetail(id){
     </div>
     <div class="eyebrow"><span>Stappen</span></div>
     <div class="sketch card">
-      ${r.steps.map((s,i)=>`<div class="step"><span class="n hand">${i+1}</span><span class="tx">${esc(s)}</span></div>`).join('')}
+      ${V.steps.map((s,i)=>`<div class="step"><span class="n hand">${i+1}</span><span class="tx">${esc(s)}</span></div>`).join('')}
     </div>
-    ${extraBlocks(r)}
+    ${extraBlocks(r, true)}
     <button class="btn fill wide" data-cook="${r.id}" style="margin-top:4px">${ic('flame','')} Begin met koken</button>
     <button class="btn ghost wide" data-del="${r.id}" style="margin-top:10px">${ic('trash','')} Recept verwijderen</button>
   `;
@@ -1304,6 +1410,44 @@ function renderAsk(){
   `;
 }
 
+let careAsk = null;
+function maybeCare(id){
+  const r = S.recipes.find(x=>x.id===id);
+  if(!r || r.careDone) return;
+  const found = careFindings(r);
+  if(!found.length){ r.careDone = true; persist(); return; }
+  careAsk = {recipeId:id, items:found};
+  $('care').classList.add('on');
+  renderCare();
+}
+function closeCare(){ $('care').classList.remove('on'); careAsk = null; }
+function renderCare(){
+  if(!careAsk) return;
+  $('care').querySelector('.sheet-card').innerHTML = `
+    <div class="cook-head" style="margin-bottom:10px">
+      <span class="h hand" style="font-size:27px">Even opletten</span>
+      <button class="back" id="careClose" aria-label="Sluiten"><svg viewBox="0 0 24 24"><path d="M18.4 5.4 5.7 18.3M5.5 5.6l12.9 12.7"/></svg></button>
+    </div>
+    <p class="subtitle" style="margin:0 0 14px">Dit recept raakt aan de voedingsregels van wie er mee-eet. Vink aan wat je in het recept wilt zetten; het komt dan ook in de kookstand terug.</p>
+    ${careAsk.items.map((c,ix)=>`<div class="sketch soft card" style="margin-bottom:10px">
+      <div class="step" style="align-items:flex-start">
+        <button class="tickbox ${c.on?'on':''}" data-careon="${ix}" aria-label="Verwerken">${ic('check','')}</button>
+        <span class="tx">
+          <span class="care-note" style="border:none;padding:0;margin:0;display:block">
+            <span class="who" style="display:block">Voor ${esc(c.who.join(' en '))}</span>
+            <span class="w" style="display:block">${esc(c.warn)}</span>
+            <span class="f" style="display:block">${esc(c.fix)}</span>
+          </span>
+        </span>
+      </div>
+    </div>`).join('')}
+    <button class="btn fill wide" id="careGo">${ic('check','')} In het recept zetten</button>
+    <button class="btn ghost wide" id="careSkip" style="margin-top:10px">Niet nu</button>
+    <div class="muted" style="font-size:13px;margin:12px 4px 0;line-height:1.45">
+      Volgens de richtlijnen van het Voedingscentrum. Geen medisch advies — overleg bij twijfel met je verloskundige, huisarts of het consultatiebureau.
+    </div>`;
+}
+
 function fileToB64(file){
   return new Promise((res,rej)=>{
     const r = new FileReader();
@@ -1377,7 +1521,7 @@ function showCandidates(list){
       level: ['easy','medium','hard'].includes(r.level) ? r.level : 'easy',
       ingredients: (r.ingredients||[]).map(String),
       steps: (r.steps||[]).map(String),
-      ...(Array.isArray(r.tips) && r.tips.length ? {tips:r.tips.map(String)} : {}),
+      ...(Array.isArray(r.tips) && r.tips.length ? {tips:r.tips.map(tipObj)} : {}),
       ...(r.uitleg ? {uitleg:String(r.uitleg)} : {})
     }));
   if(!clean.length) return false;
@@ -1422,9 +1566,9 @@ async function importRecipe(){
   }
   const isLink = /^https?:\/\//i.test(raw) || /^www\./i.test(raw);
   const tweakNote = tweak ? ` Pas het recept aan volgens deze wens en verwerk dat overal — in de naam, de ingrediënten én de stappen: ${tweak}.` : '';
-  const tipsNote = aiOn('tips') ? ' Geef in "tips" twee tot vier korte suggesties voor extra ingrediënten of kruiden.' : '';
+  const tipsNote = aiOn('tips') ? ' Geef in "tips" twee tot vier suggesties voor extra ingrediënten of kruiden. Werk elke tip uit met "tekst", "ingredienten" (met hoeveelheid), "stap" en "na" (het stapnummer waarna die stap komt).' : '';
   const uitlegNote = aiOn('uitleg') ? ' Leg in "uitleg" in twee tot vier zinnen uit hoe de belangrijkste techniek werkt en waarom je het zo doet.' : '';
-  const extraFields = `${aiOn('tips') ? ',"tips":["..."]' : ''}${aiOn('uitleg') ? ',"uitleg":"..."' : ''}`;
+  const extraFields = `${aiOn('tips') ? ',"tips":[{"tekst":"...","ingredienten":["1 el ..."],"stap":"...","na":3}]' : ''}${aiOn('uitleg') ? ',"uitleg":"..."' : ''}`;
   $('screen').innerHTML = `<h1 class="title hand">Even lezen…</h1>
     <p class="subtitle">${isLink ? 'Ik haal het recept op en schrijf het over.' : 'Ik schrijf het recept over in jouw vorm.'}</p>${PAN_DRAWING}`;
   const prompt = `Zet het onderstaande recept om naar mijn eigen receptvorm.
@@ -1432,7 +1576,7 @@ ${isLink
   ? 'Het is een link. Open hem, of zoek het recept op als de pagina niet te lezen is, en gebruik wat er echt in staat.'
   : 'Het is geplakte tekst. Houd je aan wat er staat; vul alleen aan waar iets duidelijk ontbreekt.'}
 Blijf trouw aan het origineel: dezelfde ingrediënten en dezelfde volgorde, tenzij ik hieronder om een wijziging vraag.${tweakNote}
-Schrijf in het Nederlands, tutoyeren. Maak van elke stap één korte, duidelijke zin met de tijden erin, zodat ik hem tijdens het koken kan volgen. Zet hoeveelheden in het metrieke stelsel (g, ml, el, tl).${tipsNote}${uitlegNote}
+Schrijf in het Nederlands, tutoyeren. Maak van elke stap één korte, duidelijke zin met de tijden én de hoeveelheden erin, zodat ik hem tijdens het koken kan volgen. Zet hoeveelheden in het metrieke stelsel (g, ml, el, tl).${tipsNote}${uitlegNote}
 ${equipPrompt()}
 Recept:
 ${raw}
@@ -1460,12 +1604,47 @@ Antwoord met UITSLUITEND geldige JSON, geen markdown:
   }
 }
 
+/* Een tip mag oude tekst zijn of een uitgewerkte tip met eigen ingrediënten
+   en een eigen stap. Uitgewerkt = meteen aan te vinken, zonder de AI. */
+function tipObj(t){
+  if(typeof t === 'string') return {text:t, add:[], step:null, on:false};
+  const step = t.step || (t.stap ? {after:+t.na || 0, text:String(t.stap)} : null);
+  return {
+    text: String(t.text || t.tekst || ''),
+    add: (t.add || t.ingredienten || []).map(String),
+    step: step ? {after:+step.after || 0, text:String(step.text)} : null,
+    on: !!t.on
+  };
+}
+const tipReady = t => !!((t.add && t.add.length) || t.step);
+
+/* het recept zoals het nu is: met de aangevinkte tips erin verwerkt */
+function withTips(r){
+  const ingredients = (r.ingredients||[]).slice();
+  const steps = (r.steps||[]).slice();
+  const on = (r.tips||[]).map(tipObj).filter(t=>t.on && tipReady(t));
+  on.forEach(t=>(t.add||[]).forEach(x=>{ if(!ingredients.includes(x)) ingredients.push(x); }));
+  /* van achter naar voren invoegen, dan kloppen de plekken nog */
+  on.map(t=>t.step).filter(Boolean)
+    .sort((a,b)=>b.after - a.after)
+    .forEach(st=>{ steps.splice(Math.max(0, Math.min(steps.length, st.after)), 0, st.text); });
+  return {ingredients, steps};
+}
+
 /* tips en uitleg onder de stappen, alleen als ze er zijn */
-function extraBlocks(r){
-  return `${Array.isArray(r.tips)&&r.tips.length ? `
+function extraBlocks(r, saved){
+  const tips = (r.tips||[]).map(tipObj);
+  return `${tips.length ? `
     <div class="eyebrow"><span>Tips</span></div>
+    ${saved ? `<div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">Vink een tip aan en hij wordt in het recept en de kookstand meegenomen.</div>` : ''}
     <div class="sketch card">
-      ${r.tips.map(x=>`<div class="step"><span class="n">·</span><span class="tx">${esc(x)}</span></div>`).join('')}
+      ${tips.map((t,ix)=>{
+        if(saved && tipReady(t)) return `<div class="step" style="align-items:center">
+          <button class="tickbox ${t.on?'on':''}" data-tipon="${r.id}:${ix}" aria-label="In het recept verwerken">${ic('check','')}</button>
+          <span class="tx">${esc(t.text)}${t.on?'':''}</span>
+        </div>`;
+        return `<div class="step"><span class="n">·</span><span class="tx">${esc(t.text)}</span></div>`;
+      }).join('')}
     </div>` : ''}
     ${r.uitleg ? `
     <div class="eyebrow"><span>Waarom zo?</span></div>
@@ -1530,7 +1709,7 @@ function saveCandidate(id){
   const c = suggestions.find(x=>x.id===id);
   if(!c) return null;
   const rec = { id:uid(), name:c.name, type:c.type||'dinner', mins:+c.mins||0, serves:+c.serves||2, level:c.level||'easy', ingredients:c.ingredients||[], steps:c.steps||[] };
-  if(Array.isArray(c.tips) && c.tips.length) rec.tips = c.tips;
+  if(Array.isArray(c.tips) && c.tips.length) rec.tips = c.tips.map(tipObj);
   if(c.uitleg) rec.uitleg = String(c.uitleg);
   S.recipes.push(rec);
   return rec;
@@ -1547,9 +1726,9 @@ async function suggest(opts){
   const wishNote = wish ? ` Extra wens van de kok, volg deze strikt: ${wish}.` : '';
   const searchNote = aiOn('search') ? ' Zoek eerst online naar bestaande, beproefde recepten en baseer je daarop; verzin niet zomaar iets nieuws. Noem geen bronnen of links in je antwoord.' : '';
   const schijfNote = aiOn('schijf') ? ' Houd rekening met de Schijf van Vijf van het Voedingscentrum: ruim groente en fruit, volkoren, peulvruchten, noten of vis, en beperk zout, verzadigd vet en toegevoegde suiker.' : '';
-  const tipsNote = aiOn('tips') ? ' Geef in "tips" twee tot vier korte suggesties voor extra ingrediënten, kruiden of specerijen die het gerecht beter maken.' : '';
+  const tipsNote = aiOn('tips') ? ' Geef in "tips" twee tot vier suggesties voor extra ingrediënten, kruiden of specerijen. Werk elke tip volledig uit: "tekst" is de suggestie in één zin, "ingredienten" zijn de regels die er dan bij horen (met hoeveelheid), "stap" is de extra stap in het stappenplan en "na" het stapnummer waarna die stap komt (0 = helemaal vooraan). Zo kan ik een tip met één tik in het recept verwerken.' : '';
   const uitlegNote = aiOn('uitleg') ? ' Leg in "uitleg" in twee tot vier zinnen uit hoe de belangrijkste techniek werkt en waarom je het zo doet.' : '';
-  const extraFields = `${aiOn('tips') ? ',"tips":["..."]' : ''}${aiOn('uitleg') ? ',"uitleg":"..."' : ''}`;
+  const extraFields = `${aiOn('tips') ? ',"tips":[{"tekst":"...","ingredienten":["1 el ..."],"stap":"...","na":3}]' : ''}${aiOn('uitleg') ? ',"uitleg":"..."' : ''}`;
   const lvl = (opts.level && opts.level !== 'any') ? opts.level : '';
   const levelNote = lvl ? ` Houd het kookniveau op ${LEVEL_NL[lvl]} — pas de techniek en het aantal stappen daarop aan.` : '';
   const mealNote = opts.meal==='lunchtogo' ? ' Het is een lunch om mee te nemen naar werk: thuis vooraf klaar te maken, lekt niet, blijft lekker koud of is makkelijk op te warmen, en past in een lunchbox of meeneembakje.' : '';
@@ -1558,7 +1737,7 @@ async function suggest(opts){
   $('screen').innerHTML = `<h1 class="title hand">Even denken…</h1>
     <p class="subtitle">${aiOn('search')?'Ik zoek recepten op en pas ze aan':'Ik stel ${count===1?"een idee":"ideeën"} samen'} op basis van je voorkeuren.</p>${PAN_DRAWING}`;
   const prompt = `Bedenk één ${mealLabel}. In huis: ${S.pantry.length ? S.pantry.join(', ') : 'een gewone basisvoorraad'}.
-Maximaal 45 minuten, tenzij anders gevraagd. Schrijf in het Nederlands, tutoyeren.${mealNote}${mainNote}${levelNote}${wishNote}${searchNote}${schijfNote}${tipsNote}${uitlegNote}
+Maximaal 45 minuten, tenzij anders gevraagd. Schrijf in het Nederlands, tutoyeren. Noem in elke stap de hoeveelheden waar het om gaat (300 g, 200 ml, 1 el), zodat ik tijdens het koken niet hoef terug te bladeren.${mealNote}${mainNote}${levelNote}${wishNote}${searchNote}${schijfNote}${tipsNote}${uitlegNote}
 ${equipPrompt()}${prefsPrompt(opts.prefs)}${familyPrompt(members)}
 Bedenk precies ${count} ${count===1?'recept':'verschillende recepten'} waaruit ik kan kiezen.
 Antwoord met UITSLUITEND geldige JSON, geen markdown: een array van ${count} ${count===1?'recept':'recepten'}:
@@ -1592,20 +1771,31 @@ let timerTick = null;
 
 function openCook(id){
   const r = S.recipes.find(x=>x.id===id); if(!r) return;
-  cook.steps = r.steps; cook.i = 0; cook.recipeId = id;
-  $('cook').classList.add('on'); renderTimers(); drawStep();
+  const V = withTips(r);
+  cook.steps = V.steps; cook.i = 0; cook.recipeId = id; cook.ings = V.ingredients;
+  cookAns = null; $('cook').classList.add('on'); renderTimers(); drawStep(); drawCookAsk();
 }
 function closeCook(){ $('cook').classList.remove('on'); renderTimers(); }
 
 function drawStep(){
   const s = cook.steps[cook.i] || '';
   $('cookCount').textContent = `Stap ${cook.i+1} van ${cook.steps.length}`;
-  $('cookStep').innerHTML = `<div class="cook-n">${cook.i+1}</div><div class="cook-tx">${esc(s)}</div>`;
+  const amts = stepIngs(s, cook.ings);
+  const rec = S.recipes.find(x=>x.id===cook.recipeId);
+  const careHere = ((rec && rec.care) || []).filter(c=>{
+    try{ return new RegExp(`\\b(${c.pat})`, 'i').test(s); }catch(e){ return false; }
+  });
+  $('cookStep').innerHTML = `<div class="cook-n">${cook.i+1}</div><div class="cook-tx">${esc(s)}</div>
+    ${amts.length ? `<div class="cook-amts">${amts.map(a=>`<span>${esc(a.text)}</span>`).join('')}</div>` : ''}
+    ${careHere.map(c=>`<div class="cook-care">
+      <div class="w hand">Let op · ${esc((c.who||[]).join(' en '))}</div>
+      <div class="f">${esc(c.fix)}</div>
+    </div>`).join('')}`;
   $('cookPrev').disabled = cook.i === 0;
   $('cookNext').textContent = cook.i === cook.steps.length-1 ? 'Klaar' : 'Volgende';
   const m = s.match(/(\d+)\s*(min|minuten|minuut)/i);
   if(m && !S.timers.some(t=>t.stepIdx===cook.i && t.recipeId===cook.recipeId && !t.done)){
-    const min = parseInt(m[1],10), label = labelFromStep(s, m.index);
+    const min = parseInt(m[1],10), label = timerLabel(s, cook.ings, m.index);
     $('cookTimerAdd').innerHTML = `<button class="btn ghost cook-add-t" data-addtimer="${min}" data-tlabel="${esc(label)}">${ic('flame','')} Zet timer · ${min} min · ${esc(label)}</button>`;
   } else {
     $('cookTimerAdd').innerHTML = '';
@@ -1613,6 +1803,49 @@ function drawStep(){
   const nx = cook.steps[cook.i+1];
   if(nx){ $('cookPeek').style.display='block'; $('cookPeek').innerHTML = `<div class="lbl">Straks · stap ${cook.i+2}</div><div class="ptx">${esc(nx)}</div>`; }
   else { $('cookPeek').style.display='none'; }
+}
+
+/* ingrediënten die vooral meebakken of op smaak brengen; die zijn zelden het onderwerp */
+const SIDE_ING = ['olie','olijfolie','zonnebloemolie','boter','roomboter','water','bouillon','zout','peper',
+  'wijn','azijn','melk','room','bloem','suiker','kruiden','nootmuskaat','paprikapoeder','kerrie','kaneel',
+  'peterselie','basilicum','tijm','salie','oregano','laurier','citroensap','honing'];
+/* losjes vergelijken: kipfilets ~ kipfilet, rijst ~ risottorijst */
+const ingSim = (a,b) => a === b || (a.length >= 4 && b.includes(a)) || (b.length >= 4 && a.includes(b));
+const wordsOf = t => String(t).toLowerCase().replace(/[^a-zà-öø-ÿ]+/g,' ').trim().split(' ').filter(Boolean);
+/* woordjes die in een ingrediëntnaam niets zeggen ('peper en zout') */
+const ING_SKIP = ['en','of','de','het','een','met','per','voor','naar','uit','tot','in','op','aan','bij','stuks','stuk','snufje','takjes','takje','tenen','teen','blik','pak','bosje','plakken','plak'];
+const isSide = n => wordsOf(n).some(w => SIDE_ING.some(x => ingSim(w, x)));
+
+/* elk ingrediënt dat in deze tekst genoemd wordt, op volgorde van noemen */
+function stepIngs(txt, list){
+  const words = wordsOf(txt);
+  const out = [];
+  (list||[]).forEach(orig=>{
+    const name = parseIng(String(orig)).name.replace(/\(.*?\)/g,' ');
+    const parts = wordsOf(name).filter(w=>w.length>=2 && !ING_SKIP.includes(w));
+    if(!parts.length) return;
+    for(let i=0;i<words.length;i++){
+      const w = words[i];
+      /* korte namen als 'ui' alleen precies; langere mogen buigen */
+      const hit = parts.some(p => (p.length < 4 || w.length < 4) ? w === p : ingSim(w,p));
+      if(hit){ out.push({text:String(orig), name, at:i}); break; }
+    }
+  });
+  return out.sort((a,b)=>a.at-b.at);
+}
+/* bijvoeglijke woorden vooraan zeggen niets over wát het is */
+const ING_ADJ = ['verse','vers','gedroogde','gemalen','geraspte','hele','kleine','grote','rode','witte','groene',
+  'zwarte','gele','magere','volle','gerookte','gekookte','gehakte','fijngehakte','zoete','zure','jonge','oude'];
+/* korte naam voor op een timerchip */
+function shortName(n){
+  const w = wordsOf(n.replace(/\(.*?\)/g,' ')).filter(x=>!ING_ADJ.includes(x) && !ING_SKIP.includes(x));
+  return (w[0] || 'timer').slice(0,16);
+}
+/* waar de timer voor is: liefst het ingrediënt dat het onderwerp is van de stap */
+function timerLabel(txt, list, at){
+  const hits = stepIngs(txt, list);
+  const main = hits.find(h=>!isSide(h.name)) || hits[0];
+  return main ? shortName(main.name) : labelFromStep(txt, at);
 }
 
 /* een woord uit de staptekst als klein label — werkwoorden en stopwoorden overslaan */
@@ -1627,6 +1860,74 @@ function labelFromStep(txt, at){
   const after = txt.slice(at).split(/\s+/).map(clean).filter(Boolean);
   for(const w of after){ if(ok(w)) return w; }
   return 'timer';
+}
+
+/* wat weten we zelf al? hoeveelheden en tijden staan gewoon in het recept */
+function recipeAnswer(q, r){
+  if(!r) return null;
+  const low = q.toLowerCase();
+  if(/waarom|hoezo|waarvoor|kan ik|mag ik|wat als|in plaats van|vervang/.test(low)) return null;
+  if(/hoeveel|hoe veel|hoeveelheid|gram|aantal|\bml\b|\bgr\b|liter|deciliter|lepel/.test(low)){
+    const hits = stepIngs(low, r.ingredients);
+    if(hits.length) return hits.map(h=>h.text).join('\n');
+  }
+  if(/hoe lang|hoelang|hoeveel minuten|tijd/.test(low)){
+    const hits = stepIngs(low, r.ingredients);
+    const steps = (r.steps||[]).filter(st=>/\d+\s*(min|minuten|minuut|uur|sec)/i.test(st));
+    const mine = hits.length ? steps.filter(st=>stepIngs(st, hits.map(h=>h.text)).length) : [];
+    const pick = mine.length ? mine : (hits.length ? [] : steps);
+    if(pick.length) return pick.join('\n');
+  }
+  return null;
+}
+
+let cookAns = null;
+function drawCookAsk(){
+  const box = $('cookAsk'); if(!box) return;
+  box.innerHTML = `
+    ${cookAns ? `<div class="cook-ans">
+      <button class="x" id="cookAnsX" aria-label="Sluiten">×</button>
+      <div class="q">${esc(cookAns.q)}</div>
+      <div class="a">${esc(cookAns.a)}</div>
+      ${cookAns.src ? `<div class="src">${esc(cookAns.src)}</div>` : ''}
+    </div>` : ''}
+    <div class="cook-ask">
+      <input class="inp" id="cookQ" placeholder="Vraag over dit recept" autocomplete="off">
+      <button class="btn fill" id="cookQGo" aria-label="Vragen">${ic('spark','')}</button>
+    </div>`;
+}
+async function cookQuestion(){
+  const el = $('cookQ');
+  const q = el ? el.value.trim() : '';
+  if(!q) return;
+  const r = S.recipes.find(x=>x.id===cook.recipeId);
+  const own = recipeAnswer(q, r);
+  if(own){ cookAns = {q, a:own, src:'Uit het recept'}; drawCookAsk(); return; }
+  if(!aiKey()){
+    cookAns = {q, a:'Dit staat niet met zoveel woorden in het recept. Voor andere vragen heb ik een AI-sleutel nodig — die vul je in bij Jij → AI-sleutel.', src:''};
+    drawCookAsk(); return;
+  }
+  cookAns = {q, a:'Even denken…', src:''}; drawCookAsk();
+  const ctx = r ? `Recept: ${r.name} (${r.serves} personen, ${r.mins} min).
+Ingrediënten:
+${(r.ingredients||[]).join('\n')}
+Stappen:
+${(r.steps||[]).map((x,i)=>`${i+1}. ${x}`).join('\n')}
+Ik ben nu bij stap ${cook.i+1}.` : '';
+  try{
+    const txt = await aiRequest({model:AI_MODEL, max_tokens:500, messages:[{role:'user', content:
+`Je helpt me terwijl ik sta te koken. Antwoord kort en concreet in het Nederlands, tutoyeren, maximaal drie zinnen, zonder opsomtekens.
+Staat het antwoord in het recept? Noem dan die hoeveelheid of tijd letterlijk. Anders leg je het kort uit als kok.${familyPrompt()}
+
+${ctx}
+
+Mijn vraag: ${q}`}]});
+    cookAns = {q, a:txt.trim(), src:'Antwoord van de AI'};
+  }catch(e){
+    lastAiError = e.message || String(e);
+    cookAns = {q, a:lastAiError, src:''};
+  }
+  drawCookAsk();
 }
 
 function fmtTime(sec){
@@ -1748,11 +2049,11 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
-  if(t.dataset.open){ go('recipes','detail',t.dataset.open); return; }
+  if(t.dataset.open){ go('recipes','detail',t.dataset.open); maybeCare(t.dataset.open); return; }
   if(t.dataset.go === 'new'){ go('recipes','edit',null); return; }
   if(t.dataset.go === 'edit'){ go('recipes','edit',t.dataset.id); return; }
   if(t.dataset.go === 'suggest'){ openAsk(); return; }
@@ -1814,7 +2115,7 @@ document.addEventListener('click', async (e)=>{
   if(t.dataset.addlist){
     const r = S.recipes.find(x=>x.id===t.dataset.addlist);
     const f = viewServes ? (viewServes / Math.max(1, +r.serves || 1)) : 1;
-    const need = r.ingredients.filter(i=>!(r.have||[]).includes(i)).map(i=>scaleIng(i, f));
+    const need = withTips(r).ingredients.filter(i=>!(r.have||[]).includes(i)).map(i=>scaleIng(i, f));
     if(!need.length){ toast('Alles is al in huis'); return; }
     addToList(need, r.name); toast(`${need.length} op je lijst gezet`); return;
   }
@@ -1861,7 +2162,7 @@ document.addEventListener('click', async (e)=>{
     if(!all.length){ toast('Nog niks gepland'); return; }
     Object.values(S.plan).forEach(id=>{
       const r = S.recipes.find(x=>x.id===id);
-      if(r) addToList(r.ingredients, r.name);
+      if(r) addToList(withTips(r).ingredients, r.name);
     });
     toast('Week op je lijst gezet'); return;
   }
@@ -1869,6 +2170,28 @@ document.addEventListener('click', async (e)=>{
   if(t.dataset.pan){ S.pantry = S.pantry.filter(p=>p!==t.dataset.pan); await persist(); render(); return; }
   if(t.id === 'pan-photo-btn'){ $('pan-photo-input').click(); return; }
   if(t.id === 'imp-file-btn'){ $('imp-file').click(); return; }
+  if(t.id === 'cookQGo'){ await cookQuestion(); return; }
+  if(t.id === 'cookAnsX'){ cookAns = null; drawCookAsk(); return; }
+  if(t.dataset.careon !== undefined && careAsk){
+    const c = careAsk.items[+t.dataset.careon]; if(c) c.on = !c.on;
+    renderCare(); return;
+  }
+  if(t.id === 'careClose' || t.id === 'careSkip'){
+    if(careAsk){ const r = S.recipes.find(x=>x.id===careAsk.recipeId); if(r){ r.careDone = true; await persist(); } }
+    closeCare(); return;
+  }
+  if(t.id === 'careGo'){
+    if(careAsk){
+      const r = S.recipes.find(x=>x.id===careAsk.recipeId);
+      if(r){
+        const keep = careAsk.items.filter(c=>c.on).map(({id,pat,who,warn,fix})=>({id,pat,who,warn,fix}));
+        r.care = keep; r.careDone = true;
+        await persist();
+        toast(keep.length ? `${keep.length} punt${keep.length===1?'':'en'} in het recept` : 'Niks toegevoegd');
+      }
+    }
+    closeCare(); render(); return;
+  }
   if(t.id === 'pan-add'){
     const v = $('pan-in').value.trim().toLowerCase();
     if(v && !S.pantry.includes(v)) S.pantry.push(v);
@@ -1907,9 +2230,21 @@ document.addEventListener('click', async (e)=>{
     toast(`${n} recept${n===1?'':'en'} bewaard`);
     return;
   }
+  if(t.dataset.tipon){
+    const [rid, ix] = t.dataset.tipon.split(':');
+    const r = S.recipes.find(x=>x.id===rid);
+    if(r && r.tips && r.tips[ix] != null){
+      const tip = tipObj(r.tips[ix]);
+      tip.on = !tip.on;
+      r.tips[ix] = tip;
+      await persist(); render();
+      toast(tip.on ? 'Tip zit nu in het recept' : 'Tip er weer uit');
+    }
+    return;
+  }
   if(t.dataset.savecand){
     const rec = saveCandidate(t.dataset.savecand);
-    if(rec){ await persist(); go('recipes','detail',rec.id); toast('Recept bewaard'); }
+    if(rec){ await persist(); go('recipes','detail',rec.id); toast('Recept bewaard'); maybeCare(rec.id); }
     return;
   }
   if(t.dataset.equip){
@@ -1983,6 +2318,7 @@ document.addEventListener('keydown', e=>{
   if(e.key !== 'Enter') return;
   if(e.target.id === 'shop-in'){ $('shop-add').click(); }
   if(e.target.id === 'pan-in'){ $('pan-add').click(); }
+  if(e.target.id === 'cookQ'){ $('cookQGo').click(); }
 });
 
 document.addEventListener('change', async e=>{

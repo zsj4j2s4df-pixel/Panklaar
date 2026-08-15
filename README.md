@@ -8,9 +8,22 @@ het apparaat (IndexedDB).
 
 - **Recepten** bijhouden, bekijken en bewerken, met categorieën (ontbijt, lunch,
   lunch to go, diner, bijgerecht, zoet).
-- **Kookstand** met stap-voor-stap uitleg, een preview van de volgende stap en
-  **meerdere timers die blijven doorlopen** — ook buiten de kookstand — met een
-  labeltje (waarvoor) en een melding als ze klaar zijn.
+- **Kookstand** met stap-voor-stap uitleg, een preview van de volgende stap, de
+  **hoeveelheden die bij de stap horen**, en **meerdere timers die blijven
+  doorlopen** — ook buiten de kookstand — met een labeltje dat het ingrediënt
+  van de stap noemt (kip, rijst) en een melding als ze klaar zijn.
+- **Vragen tijdens het koken**: een balk onder de stap. Gaat het om een
+  hoeveelheid of een tijd, dan komt het antwoord uit het recept zelf (zonder
+  AI); andere vragen ("waarom moet de rijst eerst glazig worden?") gaan naar de
+  AI, met het recept en de stap waar je bent als context.
+- **Tips aanvinken**: bij een recept staan tips met hun eigen ingrediënten en
+  extra stap al klaar. Eén tik en de tip zit in het recept, de boodschappenlijst
+  en de kookstand.
+- **Waarschuwing per gezinslid**: raakt een recept aan de regels van wie
+  mee-eet (alcohol, zout bij een peuter, rauw vlees bij zwangerschap …), dan
+  komt er een pop-up met de reden en wat je eraan kunt doen — met de keuze om
+  dat in het recept te zetten, zodat het bij de juiste stap in de kookstand
+  terugkomt.
 - **Gezinsleden** met voedingsrichtlijnen per situatie (zwanger, borstvoeding,
   peuter, kind …), gebaseerd op publieke richtlijnen van het Voedingscentrum
   (aangevuld met RIVM/WHO). Geen persoonlijk medisch advies.
