@@ -1338,7 +1338,18 @@ function viewImport(){
       <span class="h hand">Recept inladen</span>
       <span style="width:28px"></span>
     </div>
-    <p class="subtitle" style="margin-top:6px">Plak een recept dat je ergens tegenkwam — de hele tekst of alleen de link. Ik zet het om naar een recept zoals de rest in je kast.</p>
+    <p class="subtitle" style="margin-top:6px">Open een receptbestand, of plak een recept dat je ergens tegenkwam.</p>
+    <div class="eyebrow"><span>Uit een bestand</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">
+      Een receptbestand (.json) inladen gaat buiten de AI om — je hebt er geen sleutel voor nodig.
+    </div>
+    <button class="btn wide" id="imp-file-btn" style="margin-bottom:6px">${ic('inbox','')} Bestand kiezen</button>
+    <input type="file" accept=".json,.txt,application/json,text/plain" id="imp-file" style="display:none">
+    ${DIVIDER}
+    <div class="eyebrow"><span>Of plak een recept</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">
+      De hele tekst of alleen de link — dan schrijft de AI het over in jouw vorm.
+    </div>
     <div class="field">
       <label for="imp-in">Recept of link</label>
       <textarea class="inp" id="imp-in" rows="8" placeholder="https://…&#10;of plak hier de tekst van het recept">${esc(impText)}</textarea>
@@ -1347,9 +1358,54 @@ function viewImport(){
       <label for="imp-tweak">Wil je er iets aan veranderen? (optioneel)</label>
       <input class="inp" id="imp-tweak" value="${esc(impTweak)}" placeholder="met kip in plaats van zalm">
     </div>
-    <button class="btn fill wide" id="imp-go">${ic('inbox','')} Inladen</button>
+    <button class="btn fill wide" id="imp-go">${ic('spark','')} Inladen met AI</button>
     ${BOARD_KNIFE_DRAWING}
   `;
+}
+
+/* alles wat binnenkomt in dezelfde vorm gieten, dan naar het kijkscherm */
+function showCandidates(list){
+  const known = new Set(TYPES.map(t=>t.id));
+  const clean = (Array.isArray(list) ? list : [list])
+    .filter(r => r && r.name)
+    .map(r => ({
+      id:'c'+uid(),
+      name: String(r.name),
+      type: known.has(r.type) ? r.type : 'dinner',
+      mins: +r.mins || 0,
+      serves: +r.serves || 2,
+      level: ['easy','medium','hard'].includes(r.level) ? r.level : 'easy',
+      ingredients: (r.ingredients||[]).map(String),
+      steps: (r.steps||[]).map(String),
+      ...(Array.isArray(r.tips) && r.tips.length ? {tips:r.tips.map(String)} : {}),
+      ...(r.uitleg ? {uitleg:String(r.uitleg)} : {})
+    }));
+  if(!clean.length) return false;
+  suggestions = clean;
+  picked = new Set(suggestions.map(x=>x.id));
+  if(clean.length === 1) go('recipes','cand', clean[0].id);
+  else go('recipes','picks');
+  return true;
+}
+
+/* een receptbestand van je telefoon of laptop — hier komt geen AI aan te pas */
+function loadRecipeFile(f){
+  const rd = new FileReader();
+  rd.onload = () => {
+    let data;
+    try{ data = JSON.parse(extractJson(String(rd.result))); }
+    catch(e){
+      /* geen receptbestand? zet de tekst dan in het vak, dan kan de AI het lezen */
+      impText = String(rd.result).slice(0, 6000);
+      render();
+      toast('Geen receptbestand — de tekst staat nu in het vak');
+      return;
+    }
+    const list = Array.isArray(data) ? data : (Array.isArray(data.recipes) ? data.recipes : data);
+    if(!showCandidates(list)) toast('Geen recept in dit bestand gevonden');
+  };
+  rd.onerror = () => toast('Bestand kon niet worden gelezen');
+  rd.readAsText(f);
 }
 
 /* het recept ophalen of uit de geplakte tekst vissen, en omzetten */
@@ -1357,6 +1413,13 @@ async function importRecipe(){
   const raw = impText.trim();
   if(!raw){ toast('Plak eerst een recept of een link'); return; }
   const tweak = impTweak.trim();
+  /* is het een geplakt receptbestand? dan hoeft de AI er niet aan te pas te komen */
+  if(!tweak && /^[\[{]/.test(raw)){
+    try{
+      const data = JSON.parse(extractJson(raw));
+      if(showCandidates(Array.isArray(data) ? data : (data.recipes || data))) return;
+    }catch(e){}
+  }
   const isLink = /^https?:\/\//i.test(raw) || /^www\./i.test(raw);
   const tweakNote = tweak ? ` Pas het recept aan volgens deze wens en verwerk dat overal — in de naam, de ingrediënten én de stappen: ${tweak}.` : '';
   const tipsNote = aiOn('tips') ? ' Geef in "tips" twee tot vier korte suggesties voor extra ingrediënten of kruiden.' : '';
@@ -1383,10 +1446,7 @@ Antwoord met UITSLUITEND geldige JSON, geen markdown:
     const txt = await aiRequest(req);
     let r = JSON.parse(extractJson(txt));
     if(Array.isArray(r)) r = r[0];
-    if(!r || !r.name) throw new Error('Ik kon er geen recept uit halen. Plak anders de hele tekst van het recept.');
-    suggestions = [{ ...r, id:'c'+uid() }];
-    picked = new Set(suggestions.map(x=>x.id));
-    go('recipes','cand', suggestions[0].id);
+    if(!showCandidates(r)) throw new Error('Ik kon er geen recept uit halen. Plak anders de hele tekst van het recept.');
   }catch(e){
     lastAiError = e.message || String(e);
     const noKey = !aiKey();
@@ -1688,7 +1748,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
@@ -1808,6 +1868,7 @@ document.addEventListener('click', async (e)=>{
 
   if(t.dataset.pan){ S.pantry = S.pantry.filter(p=>p!==t.dataset.pan); await persist(); render(); return; }
   if(t.id === 'pan-photo-btn'){ $('pan-photo-input').click(); return; }
+  if(t.id === 'imp-file-btn'){ $('imp-file').click(); return; }
   if(t.id === 'pan-add'){
     const v = $('pan-in').value.trim().toLowerCase();
     if(v && !S.pantry.includes(v)) S.pantry.push(v);
@@ -1932,6 +1993,7 @@ document.addEventListener('change', async e=>{
   }
   if(e.target.dataset.slider){ S.prefs[e.target.dataset.slider] = +e.target.value; await persist(); }
   if(e.target.id === 'pan-photo-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; if(f) scanPantry(f); }
+  if(e.target.id === 'imp-file'){ const f = e.target.files && e.target.files[0]; e.target.value=''; if(f) loadRecipeFile(f); }
   /* sleutel ook bewaren als je het veld verlaat zonder op ✓ te drukken */
   if(e.target.id === 'ai-key'){ saveAiKey(e.target.value); }
 });
