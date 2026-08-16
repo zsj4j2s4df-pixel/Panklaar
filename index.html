@@ -463,6 +463,27 @@ function getal(n){ return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g,
 
 /* Eén plek voor alle AI-aanroepen, zodat een echte foutmelding zichtbaar wordt
    in plaats van een algemeen "niet gelukt". */
+/* na twee minuten stoppen we zelf, anders blijf je naar het pannetje kijken */
+function klokSignaal(ms){
+  try{
+    const c = new AbortController();
+    setTimeout(()=>{ try{ c.abort(); }catch(e){} }, ms || 120000);
+    return c.signal;
+  }catch(e){ return undefined; }
+}
+/* een fetch die er zelf uitklapt zegt niets bruikbaars; hier maken we er
+   een melding van waar je iets mee kunt */
+function verbindingsFout(naam, e, lijf){
+  const groot = lijf ? mB(lijf) : 0;
+  if(e && e.name === 'AbortError'){
+    return `${naam} deed er te lang over en is gestopt.${groot > 1 ? ` De aanvraag was ${groot} MB — probeer het met minder of kleinere foto's.` : ' Probeer het nog eens.'}`;
+  }
+  if(groot > 3){
+    return `De aanvraag naar ${naam} was te groot (${groot} MB) en kwam niet aan. Probeer het met één foto tegelijk, of een foto van dichterbij.`;
+  }
+  return `Geen verbinding met ${naam}. Controleer je internet en probeer het nog eens.`;
+}
+
 /* de tekst en een eventuele foto uit onze eigen aanvraagvorm halen */
 function pakInhoud(body){
   const c = (body.messages && body.messages[0] && body.messages[0].content) || '';
@@ -489,11 +510,13 @@ async function openaiRequest(body){
     max_output_tokens: Math.max(256, +body.max_tokens || 1000)
   };
   if(body.tools && body.tools.length) req.tools = [{type:'web_search'}];
+  const lijf = JSON.stringify(req);
   let res;
   try{
-    res = await fetch('https://api.openai.com/v1/responses', {method:'POST', headers:aiHeaders(), body:JSON.stringify(req)});
+    res = await fetch('https://api.openai.com/v1/responses',
+      {method:'POST', headers:aiHeaders(), body:lijf, signal:klokSignaal()});
   }catch(e){
-    throw new Error('Geen verbinding met OpenAI. Controleer je internet.');
+    throw new Error(verbindingsFout('OpenAI', e, lijf));
   }
   let data;
   try{ data = await res.json(); }
@@ -511,7 +534,12 @@ async function openaiRequest(body){
   });
   if(!out && typeof data.output_text === 'string') out = data.output_text;
   boekGebruik(data.usage, zoek);
-  if(!out) throw new Error('Leeg antwoord van OpenAI.');
+  if(!out){
+    const reden = data.status === 'incomplete' && data.incomplete_details && data.incomplete_details.reason;
+    throw new Error(reden === 'max_output_tokens'
+      ? `${aiModel()} kwam niet tot een antwoord binnen de ruimte die het kreeg. Kies een kleiner aantal recepten, of een ander model bij Jij → Model.`
+      : `Leeg antwoord van OpenAI (model ${aiModel()}). Probeer een ander model bij Jij → Model.`);
+  }
   return out;
 }
 
@@ -526,12 +554,12 @@ async function aiRequest(body){
   /* zoeken gebeurt bij Anthropic zelf; die kan de beurt pauzeren, dus vervolgen we hem */
   for(let round = 0; round < 4; round++){
     let res;
+    const lijf = JSON.stringify({...body, model:aiModel(), messages:msgs});
     try{
-      res = await fetch('https://api.anthropic.com/v1/messages', {
-        method:'POST', headers: aiHeaders(), body: JSON.stringify({...body, model:aiModel(), messages:msgs})
-      });
+      res = await fetch('https://api.anthropic.com/v1/messages',
+        {method:'POST', headers: aiHeaders(), body: lijf, signal:klokSignaal()});
     }catch(e){
-      throw new Error('Geen verbinding met de AI-dienst. Controleer je internet.');
+      throw new Error(verbindingsFout('Claude', e, lijf));
     }
     let data;
     try{ data = await res.json(); }
@@ -1952,7 +1980,13 @@ function schaalFoto(dataUrl, max, kwal){
       const ctx = cv.getContext('2d');
       ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
       ctx.drawImage(img, 0, 0, cv.width, cv.height);
-      try{ res(cv.toDataURL('image/jpeg', kwal)); }catch(e){ res(dataUrl); }
+      let klein = dataUrl;
+      try{ klein = cv.toDataURL('image/jpeg', kwal); }catch(e){}
+      /* kwam er een leeg vel terug (te weinig geheugen)? neem dan het origineel */
+      if(klein.length < 3000 && dataUrl.length > 6000) klein = dataUrl;
+      cv.width = cv.height = 1;
+      img.src = '';
+      res(klein);
     };
     img.onerror = ()=>rej(new Error('Die foto kon ik niet lezen'));
     img.src = dataUrl;
@@ -1998,17 +2032,31 @@ async function fotoVanAi(r){
   try{ return await schaalFoto(ruw, 900, 0.85); }catch(e){ return ruw; }
 }
 
-function fileToB64(file){
+/* Een foto van een telefoon is al gauw vijf megabyte. Drie daarvan in één
+   aanvraag komt niet aan — de verbinding klapt eruit voordat er een antwoord
+   is. Daarom eerst verkleinen; tekst op een bladzijde blijft goed leesbaar. */
+function fileToB64(file, max){
   return new Promise((res,rej)=>{
     const r = new FileReader();
-    r.onload = () => { const m = /data:(.*?);base64,(.*)$/.exec(r.result); if(m) res({media_type:m[1], data:m[2]}); else rej(new Error('bad')); };
-    r.onerror = rej; r.readAsDataURL(file);
+    r.onload = () => {
+      const ruw = String(r.result);
+      schaalFoto(ruw, max || 1400, 0.85).then(klein=>{
+        const m = /data:(.*?);base64,(.*)$/.exec(klein) || /data:(.*?);base64,(.*)$/.exec(ruw);
+        if(m) res({media_type:m[1], data:m[2]}); else rej(new Error('Die foto kon ik niet lezen'));
+      }, ()=>{
+        const m = /data:(.*?);base64,(.*)$/.exec(ruw);
+        if(m) res({media_type:m[1], data:m[2]}); else rej(new Error('Die foto kon ik niet lezen'));
+      });
+    };
+    r.onerror = () => rej(new Error('Die foto kon ik niet lezen'));
+    r.readAsDataURL(file);
   });
 }
+const mB = txt => Math.round(String(txt).length / 1024 / 1024 * 10) / 10;
 async function scanPantry(file){
   toast('Foto wordt bekeken…');
   let img;
-  try{ img = await fileToB64(file); }catch(e){ toast('Kon de foto niet lezen'); return; }
+  try{ img = await fileToB64(file, 1100); }catch(e){ toast('Kon de foto niet lezen'); return; }
   try{
     const txt = await aiRequest({ model:AI_MODEL, max_tokens:600, messages:[{role:'user', content:[
       {type:'image', source:{type:'base64', media_type:img.media_type, data:img.data}},
@@ -2176,10 +2224,17 @@ async function voegFotosToe(files){
   leesImpVelden();
   const ruimte = Math.max(0, 3 - impFotos.length);
   if(!ruimte){ toast('Drie foto’s is het maximum'); return; }
-  try{
-    const beelden = await Promise.all(lijst.slice(0, ruimte).map(fileToB64));
-    beelden.forEach(b => impFotos.push({mt:b.media_type, data:b.data}));
-  }catch(e){ toast('Die foto kon ik niet lezen'); return; }
+  /* één voor één: twee grote foto's tegelijk verkleinen loopt op een
+     telefoon uit z'n geheugen, en dan komt de tweede er leeg uit */
+  let mis = 0;
+  for(const f of lijst.slice(0, ruimte)){
+    try{
+      const b = await fileToB64(f);
+      impFotos.push({mt:b.media_type, data:b.data});
+    }catch(e){ mis++; }
+  }
+  if(mis) toast(`${mis} foto kon ik niet lezen`);
+  if(!impFotos.length) return;
   render();
   toast(`${impFotos.length} ${impFotos.length===1?'foto':'foto’s'} klaar — schrijf er eventueel iets bij`);
 }
