@@ -227,6 +227,9 @@
     border-radius:16px;padding:10px 14px;}
   .cook-care .w{font-size:16px;line-height:1.35;}
   .cook-care .f{font-size:16px;line-height:1.35;margin-top:4px;}
+  .balk{height:12px;border:2px solid var(--ink);border-radius:8px;background:var(--card-2);
+    filter:url(#wobble-h);overflow:hidden;}
+  .balk span{display:block;height:100%;background:var(--ink-soft);}
   .pref-row{display:flex;align-items:center;gap:12px;margin-bottom:14px;}
   .pref-row>span:first-child{width:78px;flex:none;font-size:19px;}
   .pref-val{width:46px;text-align:right;flex:none;font-size:21px;}
@@ -276,6 +279,10 @@
   </div>
 
   <div class="sheet" id="care">
+    <div class="sheet-card"></div>
+  </div>
+
+  <div class="sheet" id="warn">
     <div class="sheet-card"></div>
   </div>
 
@@ -342,6 +349,46 @@ function aiHeaders(){
   return h;
 }
 
+/* Wat een aanvraag ongeveer kost. Anthropic rekent per miljoen tokens; het
+   zoeken op internet gaat per duizend zoekopdrachten. Prijzen van Sonnet —
+   staat de prijs of het model anders, pas ze hier aan. */
+const PRIJS = {
+  invoer:      3.00 / 1e6,
+  uitvoer:    15.00 / 1e6,
+  cacheSchrijf: 3.75 / 1e6,
+  cacheLees:    0.30 / 1e6,
+  zoeken:     10.00 / 1000
+};
+const maandNu = () => new Date().toISOString().slice(0,7);
+const MAAND_NL = ['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
+function maandLabel(k){
+  const d = k.split('-');
+  return `${MAAND_NL[+d[1]-1]} ${d[0]}`;
+}
+function budget(){ const b = +(S.budget); return b > 0 ? b : 5; }
+function maandVak(k){
+  if(!S.usage) S.usage = {};
+  if(!S.usage[k]) S.usage[k] = {calls:0, in:0, out:0, cw:0, cr:0, zoek:0, kosten:0, gewaarschuwd:[]};
+  if(!S.usage[k].gewaarschuwd) S.usage[k].gewaarschuwd = [];
+  return S.usage[k];
+}
+/* wat één antwoord kostte, bij de maand optellen */
+function boekGebruik(u){
+  if(!u) return;
+  const m = maandVak(maandNu());
+  const inv = +u.input_tokens || 0, uit = +u.output_tokens || 0;
+  const cw = +u.cache_creation_input_tokens || 0, cr = +u.cache_read_input_tokens || 0;
+  const zk = (u.server_tool_use && +u.server_tool_use.web_search_requests) || 0;
+  m.calls += 1; m.in += inv; m.out += uit; m.cw += cw; m.cr += cr; m.zoek += zk;
+  m.kosten += inv*PRIJS.invoer + uit*PRIJS.uitvoer + cw*PRIJS.cacheSchrijf + cr*PRIJS.cacheLees + zk*PRIJS.zoeken;
+}
+function dollar(n){
+  if(!n) return '$0,00';
+  if(n < 0.01) return '< $0,01';
+  return '$' + n.toFixed(2).replace('.', ',');
+}
+function getal(n){ return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
+
 /* Eén plek voor alle AI-aanroepen, zodat een echte foutmelding zichtbaar wordt
    in plaats van een algemeen "niet gelukt". */
 async function aiRequest(body){
@@ -365,10 +412,12 @@ async function aiRequest(body){
       throw new Error(msg);
     }
     if(!data || !Array.isArray(data.content)) throw new Error('Leeg antwoord van de AI-dienst.');
+    boekGebruik(data.usage);
     out = data.content.filter(c=>c.type==='text').map(c=>c.text).join('');
     if(data.stop_reason === 'pause_turn'){ msgs = msgs.concat([{role:'assistant', content:data.content}]); continue; }
     break;
   }
+  persist(); letOpBudget();
   return out.replace(/```json|```/g,'').trim();
 }
 
@@ -1279,9 +1328,10 @@ function viewProfile(){
       </div>
     </div>
     <button class="btn ghost wide" id="ai-test" style="margin-bottom:10px">${ic('spark','')} Sleutel testen</button>
-    ${lastAiError ? `<div class="sketch soft card" style="margin-bottom:20px">
+    ${lastAiError ? `<div class="sketch soft card" style="margin-bottom:14px">
       <div class="muted" style="font-size:14px;line-height:1.45">Laatste AI-melding: ${esc(lastAiError)}</div>
-    </div>` : '<div style="margin-bottom:20px"></div>'}
+    </div>` : ''}
+    ${gebruikBlok()}
     <div class="eyebrow"><span>Weergave</span></div>
     <div class="chips" style="margin-bottom:20px">
       ${[['auto','Auto'],['light','Daglicht'],['dark','Schoolbord']].map(([v,l])=>
@@ -1399,6 +1449,55 @@ function viewMemberEdit(id){
     <button class="btn fill wide" data-savemember="${m?m.id:'new'}">${ic('check','')} Gezinslid opslaan</button>
     ${m?`<button class="btn ghost wide" data-memberdel="${m.id}" style="margin-top:10px">${ic('trash','')} Gezinslid verwijderen</button>`:''}
   `;
+}
+
+/* Wat de AI deze maand heeft gekost, en hoeveel er nog over is */
+function gebruikBlok(){
+  const k = maandNu(), m = maandVak(k), b = budget();
+  const deel = Math.min(100, Math.round(m.kosten / b * 100));
+  const over = Math.max(0, b - m.kosten);
+  const eerder = Object.keys(S.usage||{}).filter(x=>x!==k).sort().reverse().slice(0,3);
+  const totaal = Object.keys(S.usage||{}).reduce((n,x)=>n + (S.usage[x].kosten||0), 0);
+  return `
+    <div class="eyebrow"><span>AI-gebruik</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 10px;line-height:1.4">
+      Geschat op basis van wat de AI per antwoord teruggeeft. Je echte tegoed staat bij Anthropic.
+    </div>
+    <div class="sketch card">
+      <div class="row" style="align-items:flex-end;margin-bottom:8px">
+        <div class="grow">
+          <div class="meta">${esc(maandLabel(k))}</div>
+          <div class="name hand" style="font-size:30px">${dollar(m.kosten)}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="meta">nog over</div>
+          <div class="name hand" style="font-size:22px">${dollar(over)}</div>
+        </div>
+      </div>
+      <div class="balk"><span style="width:${deel}%"></span></div>
+      <div class="meta" style="margin-top:6px">${deel}% van ${dollar(b)} · ${m.calls} ${m.calls===1?'aanvraag':'aanvragen'}</div>
+      <div class="stat-grid" style="margin-top:12px">
+        <div class="stat"><div class="k">Tokens in</div><div class="v hand" style="font-size:20px">${getal(m.in + m.cw + m.cr)}</div></div>
+        <div class="stat"><div class="k">Tokens uit</div><div class="v hand" style="font-size:20px">${getal(m.out)}</div></div>
+        <div class="stat"><div class="k">Zoekacties</div><div class="v hand" style="font-size:20px">${m.zoek}</div></div>
+      </div>
+    </div>
+    <div class="field" style="margin-bottom:10px">
+      <label for="ai-budget">Maandbedrag in dollars</label>
+      <div class="split">
+        <input class="inp" id="ai-budget" type="number" inputmode="decimal" min="1" step="1" value="${b}" style="flex:1">
+        <button class="btn fill" id="ai-budget-save" aria-label="Bedrag opslaan">${ic('check','')}</button>
+      </div>
+    </div>
+    <div class="muted" style="font-size:14px;margin:0 4px 10px;line-height:1.45">
+      Je krijgt één melding als er nog 20% over is en één als er nog 10% over is. Elke nieuwe maand begint opnieuw.
+    </div>
+    ${eerder.length ? `
+    <div class="sketch soft card" style="margin-bottom:10px">
+      ${eerder.map(x=>`<div class="step"><span class="n">·</span><span class="tx">${esc(maandLabel(x))} — ${dollar(S.usage[x].kosten||0)} in ${S.usage[x].calls||0} ${(S.usage[x].calls||0)===1?'aanvraag':'aanvragen'}</span></div>`).join('')}
+      <div class="step"><span class="n">·</span><span class="tx">Alles bij elkaar: <span class="hand">${dollar(totaal)}</span></span></div>
+    </div>` : ''}
+    <button class="btn ghost wide" id="ai-usage-reset" style="margin-bottom:20px">${ic('trash','')} Tellerstand wissen</button>`;
 }
 
 /* voedingsregels van alle mee-eters, samengevoegd, voor de AI-prompt */
@@ -1522,6 +1621,40 @@ Antwoord met UITSLUITEND geldige JSON, geen markdown:
     toast(`Uitzoeken mislukt: ${lastAiError}`);
   }
   researching = ''; render();
+}
+
+/* Eén keer waarschuwen bij 20% over, en één keer bij 10% over. Per maand,
+   want daar loopt het budget ook per maand. */
+function letOpBudget(){
+  const m = maandVak(maandNu()), b = budget();
+  const overPct = Math.max(0, (1 - m.kosten / b) * 100);
+  const grens = overPct <= 10 ? 10 : (overPct <= 20 ? 20 : 0);
+  if(!grens || m.gewaarschuwd.indexOf(grens) >= 0) return;
+  m.gewaarschuwd.push(grens);
+  /* val je in één keer door beide grenzen, dan alleen de laagste melden */
+  if(grens === 10 && m.gewaarschuwd.indexOf(20) < 0) m.gewaarschuwd.push(20);
+  persist();
+  toonBudgetMelding(grens, m, b);
+}
+function toonBudgetMelding(grens, m, b){
+  const over = Math.max(0, b - m.kosten);
+  $('warn').querySelector('.sheet-card').innerHTML = `
+    <div class="cook-head" style="margin-bottom:10px">
+      <span class="h hand" style="font-size:27px">Nog ${grens}% over</span>
+      <button class="back" id="warnClose" aria-label="Sluiten"><svg viewBox="0 0 24 24"><path d="M18.4 5.4 5.7 18.3M5.5 5.6l12.9 12.7"/></svg></button>
+    </div>
+    <p class="subtitle" style="margin:0 0 14px">Je hebt deze maand ${dollar(m.kosten)} van je ${dollar(b)} gebruikt. Er is nog ongeveer ${dollar(over)} over.</p>
+    <div class="sketch card">
+      <div class="step"><span class="n">·</span><span class="tx">Zet <span class="hand">Recepten opzoeken</span> uit bij Voorkeuren als je goedkoper wilt werken — zoeken is het duurste onderdeel.</span></div>
+      <div class="step"><span class="n">·</span><span class="tx">Vraag om minder recepten tegelijk in de pop-up.</span></div>
+      <div class="step"><span class="n">·</span><span class="tx">Verhoog je maandbedrag bij <span class="hand">Jij → AI-gebruik</span> als dit gewoon klopt.</span></div>
+    </div>
+    <button class="btn fill wide" id="warnGo" style="margin-top:4px">${ic('user','')} Naar AI-gebruik</button>
+    <button class="btn ghost wide" id="warnOk" style="margin-top:10px">Begrepen</button>
+    <div class="muted" style="font-size:13px;margin:12px 4px 0;line-height:1.45">
+      Dit is een schatting op basis van de tokens die de AI teruggeeft. Je echte tegoed staat bij Anthropic.
+    </div>`;
+  $('warn').classList.add('on');
 }
 
 let careAsk = null;
@@ -2187,7 +2320,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research]');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research],#ai-budget-save,#ai-usage-reset,#warnClose,#warnOk,#warnGo');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
@@ -2317,6 +2450,22 @@ document.addEventListener('click', async (e)=>{
   if(t.id === 'careClose' || t.id === 'careSkip'){
     if(careAsk){ const r = S.recipes.find(x=>x.id===careAsk.recipeId); if(r){ r.careDone = true; await persist(); } }
     closeCare(); return;
+  }
+  if(t.id === 'warnClose' || t.id === 'warnOk'){ $('warn').classList.remove('on'); return; }
+  if(t.id === 'warnGo'){ $('warn').classList.remove('on'); go('profile'); return; }
+  if(t.id === 'ai-budget-save'){
+    const v = +($('ai-budget') ? $('ai-budget').value : 0);
+    if(!(v > 0)){ toast('Vul een bedrag boven nul in'); return; }
+    S.budget = v;
+    /* nieuw bedrag, dus de meldingen mogen weer een keer */
+    maandVak(maandNu()).gewaarschuwd = [];
+    await persist(); render(); toast(`Maandbedrag op ${dollar(v)}`);
+    return;
+  }
+  if(t.id === 'ai-usage-reset'){
+    S.usage = {};
+    await persist(); render(); toast('Tellerstand gewist');
+    return;
   }
   if(t.id === 'careGo'){
     if(careAsk){
@@ -2493,6 +2642,8 @@ document.addEventListener('input', e=>{
   else { S.recipes = seed(); S.family = seedFamily(); S.equip = seedEquip(); S.prefs = {...DEFAULT_PREFS}; await persist(); }
   applyTheme();
   if(!S.timers) S.timers = [];
+  if(!S.usage) S.usage = {};
+  if(!(+S.budget > 0)) S.budget = 5;
   /* ?add=honing,koekjes,zalm — zo kan een Siri-opdracht items aanleveren */
   try{
     const q = new URLSearchParams(location.search).get('add');

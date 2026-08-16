@@ -54,6 +54,16 @@ Anthropic API en vragen om je eigen API-sleutel. Zonder sleutel werkt de rest
 van de app gewoon: recepten bijhouden, koken met timers, boodschappenlijst,
 weekplanner en gezinsleden.
 
+### AI-gebruik en budget
+
+Onder **Jij → AI-gebruik** staat wat de AI deze maand ongeveer heeft gekost, in
+dollars: het bedrag, hoeveel er nog over is van je maandbedrag, het aantal
+aanvragen, de tokens en het aantal zoekacties, plus de vorige maanden. Het is een
+schatting op basis van de tokens die de API per antwoord teruggeeft, tegen de
+prijzen van Sonnet (`PRIJS` in de code) — je echte tegoed staat bij Anthropic.
+Je krijgt één melding als er nog 20% van je maandbedrag over is en één bij 10%;
+elke nieuwe maand begint opnieuw.
+
 ### AI-sleutel stap voor stap
 
 1. Ga naar [console.anthropic.com](https://console.anthropic.com) en log in, of
