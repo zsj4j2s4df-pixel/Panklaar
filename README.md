@@ -18,7 +18,8 @@ het apparaat (IndexedDB).
   AI, met het recept en de stap waar je bent als context.
 - **Tips aanvinken**: bij een recept staan tips met hun eigen ingrediënten en
   extra stap al klaar. Eén tik en de tip zit in het recept, de boodschappenlijst
-  en de kookstand.
+  en de kookstand. Kwam een tip als losse zin binnen, dan wordt hij bij het
+  aanvinken alsnog uitgewerkt (met de AI, of anders als slotstap).
 - **Waarschuwing per gezinslid**: raakt een recept aan de regels van wie
   mee-eet (een allergie, alcohol, zout bij een peuter, rauw vlees bij
   zwangerschap …), dan
@@ -38,12 +39,12 @@ het apparaat (IndexedDB).
 - **Wat heb ik in huis**: voorraad aanvullen door een **foto** te maken of te typen.
 - **Wat zullen we koken?**: een korte pop-up (maaltijd, wie eet mee, voorkeuren)
   die met de AI 1–3 recepten voorstelt om uit te kiezen.
-- **Recept inladen** op drie manieren: een **foto** van een kookboek, tijdschrift,
-  kaartje of je eigen handschrift (meerdere foto's tegelijk voor een dubbele
-  pagina), **geplakte tekst of een link**, of een **receptbestand** (`.json`, gaat
-  buiten de AI om). Bij de eerste twee kun je meteen een wijziging meegeven, zoals
-  "met kip in plaats van zalm". In de map [`recepten/`](recepten) staan
-  kant-en-klare bestanden om in te laden.
+- **Recept inladen** in drie stappen: **foto's toevoegen** (kookboek, tijdschrift,
+  kaartje of je eigen handschrift — tot drie, voor een dubbele pagina) en/of
+  **tekst of een link plakken**, daarna eventueel een **titel en een opmerking**
+  erbij zetten, en pas dan op **Maak er mijn recept van** drukken. Een
+  **receptbestand** (`.json`) inladen kan ook en gaat buiten de AI om; in de map
+  [`recepten/`](recepten) staan er een paar klaar.
 - **Boodschappenlijst** (gegroepeerd per gerecht, hoeveelheden worden bij elkaar
   opgeteld) en **weekplanner**.
 - Installeerbare **PWA**, werkt offline (behalve de AI-functies).
