@@ -419,6 +419,32 @@ const STAGES = [
 ];
 const stageLabel = id => (STAGES.find(s=>s.id===id)||{label:id}).label;
 
+/* De veertien wettelijke allergenen, met de woorden waaraan je ze in een
+   recept herkent. Plantaardige melk (amandelmelk, kokosmelk) valt bewust
+   buiten 'melk' — daar staat het woord niet los. */
+const ALLERGENS = [
+  {id:'gluten',  label:'Gluten',    pat:'tarwe|bloem|brood|broodkruim|paneermeel|pasta|spaghetti|penne|macaroni|lasagne|couscous|bulgur|griesmeel|spelt|gerst|rogge|panko|wrap|tortilla|croutons|bier|seitan'},
+  {id:'melk',    label:'Melk',      pat:'melk|kaas|boter|roomboter|room|slagroom|yoghurt|kwark|mascarpone|mozzarella|parmezaan|parmezaanse|feta|crème fraîche|creme fraiche|karnemelk|ricotta'},
+  {id:'ei',      label:'Ei',        pat:'ei|eieren|eigeel|eiwit|eidooier|mayonaise|meringue'},
+  {id:'pinda',   label:'Pinda',     pat:'pinda|pindas|pindakaas|pindaolie|satésaus|satesaus'},
+  {id:'noten',   label:'Noten',     pat:'noot|noten|walnoot|walnoten|amandel|amandelen|hazelnoot|hazelnoten|cashew|cashewnoten|pecan|pistache|macadamia|paranoot|marsepein|notenmix'},
+  {id:'soja',    label:'Soja',      pat:'soja|sojasaus|sojamelk|ketjap|tofu|tempeh|edamame|miso'},
+  {id:'vis',     label:'Vis',       pat:'vis|zalm|tonijn|kabeljauw|forel|haring|makreel|ansjovis|vissaus|surimi|koolvis|pangasius'},
+  {id:'schaal',  label:'Schaaldieren', pat:'garnaal|garnalen|kreeft|krab|scampi|langoustine|rivierkreeft'},
+  {id:'week',    label:'Weekdieren', pat:'mossel|mosselen|oester|oesters|inktvis|calamari|sint-jakobsschelp|coquille'},
+  {id:'sesam',   label:'Sesam',     pat:'sesam|sesamzaad|sesamolie|tahin|tahini|hummus'},
+  {id:'selderij',label:'Selderij',  pat:'selderij|bleekselderij|knolselderij|selderijzout'},
+  {id:'mosterd', label:'Mosterd',   pat:'mosterd|mosterdzaad|dijon'},
+  {id:'lupine',  label:'Lupine',    pat:'lupine|lupinemeel'},
+  {id:'sulfiet', label:'Sulfiet',   pat:'sulfiet|sulfieten|gedroogde abrikozen|gedroogde vijgen'}
+];
+const allergenLabel = id => (ALLERGENS.find(a=>a.id===id)||{label:id}).label;
+/* eigen tekst mag ook: 'kiwi, blauwe bessen' */
+const allergyWords = m => String((m && m.allergyText) || '').split(/[,;]+/).map(x=>x.trim()).filter(x=>x.length>2);
+function memberAllergies(m){
+  return [...((m && m.allergies) || []).map(allergenLabel), ...allergyWords(m)];
+}
+
 /* per situatie: avoid = niet eten, limit = beperken, ok = let op/mag wel */
 const STAGE_RULES = {
   pregnant:{ src:'Voedingscentrum — Zwangerschap',
@@ -543,6 +569,21 @@ function careFindings(r){
   if(!fam.length) return [];
   const txt = [...(r.ingredients||[]), ...(r.steps||[])].join(' \n ').toLowerCase();
   const out = [];
+  /* allergie gaat voor: dat is geen 'let op' maar een harde streep */
+  fam.forEach(m=>{
+    const own = [
+      ...((m.allergies||[]).map(id=>ALLERGENS.find(a=>a.id===id)).filter(Boolean)),
+      ...allergyWords(m).map(w=>({id:'eigen:'+w, label:w, pat:w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}))
+    ];
+    own.forEach(a=>{
+      let re; try{ re = new RegExp(`\\b(${a.pat})`, 'i'); }catch(e){ return; }
+      if(!re.test(txt)) return;
+      const stepIdx = (r.steps||[]).findIndex(st=>re.test(String(st)));
+      out.push({id:'allergie:'+a.id, pat:a.pat, who:[m.name], stepIdx, on:true,
+        warn:`Dit recept bevat ${a.label.toLowerCase()} — daar is ${m.name} allergisch voor.`,
+        fix:`Laat het weg of vervang het door iets zonder ${a.label.toLowerCase()}, en controleer ook de etiketten van sauzen, bouillon en kant-en-klare producten op sporen.`});
+    });
+  });
   CARE_CHECKS.forEach(c=>{
     const who = fam.filter(m=>(m.stages||[]).some(st=>c.stages.includes(st))).map(m=>m.name);
     if(!who.length) return;
@@ -1281,21 +1322,37 @@ function viewMember(id){
     <div class="sketch card">
       ${items.map(x=>`<div class="step"><span class="n">·</span><span class="tx">${esc(x)}</span></div>`).join('')}
     </div>` : '';
+  const alg = memberAllergies(m);
   const tags = (m.stages||[]).map(stageLabel).join(' · ') || 'Geen bijzonderheden';
-  const empty = !R.avoid.length && !R.limit.length && !R.ok.length && !R.notes.length;
+  const empty = !R.avoid.length && !R.limit.length && !R.ok.length && !R.notes.length && !alg.length && !m.ai;
   return `
     <div class="detail-top">
       <button class="back" data-tab="profile" aria-label="Terug">${ic('back','')}</button>
       <button class="icon-btn" data-memberedit="${m.id}" aria-label="Gezinslid bewerken">${ic('edit','')}</button>
     </div>
     <h1 class="title hand" style="font-size:36px;margin-top:6px">${esc(m.name)}</h1>
-    <p class="subtitle">${esc(tags)}${m.note?` — ${esc(m.note)}`:''}${m.eat?'':' · eet niet mee'}</p>
+    <p class="subtitle">${esc(tags)}${alg.length?` · allergie: ${esc(alg.join(', '))}`:''}${m.note?` — ${esc(m.note)}`:''}${m.eat?'':' · eet niet mee'}</p>
     ${sect('Niet eten', R.avoid)}
     ${sect('Beperken', R.limit)}
     ${sect('Let op / mag wel', R.ok)}
     ${R.notes.map(x=>`<div class="sketch card"><div class="muted" style="font-size:16px;line-height:1.45">${esc(x)}</div></div>`).join('')}
     ${empty?`<div class="sketch card"><div class="muted" style="font-size:17px">Geen bijzondere voedingsregels.</div></div>`:''}
     ${R.srcs.length?`<p class="muted" style="font-size:15px;margin:6px 4px 10px">Bron: ${esc(R.srcs.join(' · '))}</p>`:''}
+    ${alg.length ? `
+    <div class="eyebrow"><span>Allergie</span></div>
+    <div class="sketch card">
+      ${alg.map(x=>`<div class="step"><span class="n">·</span><span class="tx">${esc(x)}</span></div>`).join('')}
+    </div>
+    <div class="muted" style="font-size:14px;margin:0 4px 14px;line-height:1.45">Dit gaat als harde eis mee bij het bedenken én het inladen van recepten, en komt als waarschuwing terug als het er toch in staat.</div>` : ''}
+    ${m.ai ? `
+    <div class="eyebrow"><span>Wat de AI opzocht</span></div>
+    ${sect('Niet eten (AI)', m.ai.avoid||[])}
+    ${sect('Beperken (AI)', m.ai.limit||[])}
+    ${sect('Let op (AI)', m.ai.ok||[])}
+    ${(m.ai.bronnen||[]).length ? `<p class="muted" style="font-size:15px;margin:6px 4px 10px">Bron: ${esc(m.ai.bronnen.join(' · '))}</p>` : ''}` : ''}
+    <button class="btn wide" data-research="${m.id}" style="margin-bottom:14px">
+      ${ic('spark','')} ${researching===m.id ? 'Bezig met uitzoeken…' : (m.ai ? 'Opnieuw laten uitzoeken' : 'Laat de AI uitzoeken wat geldt')}
+    </button>
     <div class="sketch soft card">
       <div class="muted" style="font-size:15px;line-height:1.45">${NUTRI_DISCLAIMER}</div>
     </div>
@@ -1304,7 +1361,7 @@ function viewMember(id){
 
 function viewMemberEdit(id){
   const m = id!=='new' ? S.family.find(x=>x.id===id) : null;
-  const d = m || {name:'', stages:[], eat:true, note:''};
+  const d = m || {name:'', stages:[], eat:true, note:'', allergies:[], allergyText:''};
   return `
     <div class="detail-top">
       <button class="back" data-tab="profile" aria-label="Terug">${ic('back','')}</button>
@@ -1320,6 +1377,16 @@ function viewMemberEdit(id){
       <div class="chips" id="m-stages">
         ${STAGES.map(st=>`<button class="chip ${d.stages.includes(st.id)?'on':''}" data-stage="${st.id}">${st.label}</button>`).join('')}
       </div>
+    </div>
+    <div class="field">
+      <label>Allergie — meerdere mogelijk</label>
+      <div class="chips" id="m-allergies">
+        ${ALLERGENS.map(a=>`<button class="chip ${(d.allergies||[]).includes(a.id)?'on':''}" data-allergen="${a.id}">${a.label}</button>`).join('')}
+      </div>
+    </div>
+    <div class="field">
+      <label for="m-allergytext">Andere allergie of iets wat hij/zij niet verdraagt</label>
+      <input class="inp" id="m-allergytext" value="${esc(d.allergyText||'')}" placeholder="bijv. kiwi, blauwe bessen">
     </div>
     <div class="field">
       <label for="m-note">Notitie (optioneel)</label>
@@ -1342,14 +1409,24 @@ function familyPrompt(members){
   fam.forEach(m=>{ const R=memberRules(m);
     R.avoid.forEach(x=>{ if(!avoid.includes(x)) avoid.push(x); });
     R.limit.forEach(x=>{ if(!limit.includes(x)) limit.push(x); }); });
+  /* wat de AI eerder per persoon uitzocht telt net zo hard mee */
+  fam.forEach(m=>{
+    const A = (m.ai && m.ai.avoid) || [];
+    const L = (m.ai && m.ai.limit) || [];
+    A.forEach(x=>{ const v = `${x} (${m.name})`; if(!avoid.includes(v)) avoid.push(v); });
+    L.forEach(x=>{ const v = `${x} (${m.name})`; if(!limit.includes(v)) limit.push(v); });
+  });
+  const alg = fam.map(m=>{ const a = memberAllergies(m); return a.length ? `${m.name}: ${a.join(', ')}` : null; }).filter(Boolean);
+  const algLine = alg.length ? `\nALLERGIEËN — deze ingrediënten mogen er in geen enkele vorm in, ook niet als spoor of in een saus, bouillon of kant-en-klaar product: ${alg.join('; ')}. Kies een alternatief en noem dat in het recept.` : '';
   const who = fam.map(m=>{ const st=(m.stages||[]).filter(x=>x!=='none').map(stageLabel);
-    return `${m.name}${st.length?` (${st.join(', ')})`:''}`; }).join('; ');
-  if(!avoid.length && !limit.length) return `\nWie eet mee: ${who}.`;
+    const a = memberAllergies(m);
+    return `${m.name}${st.length?` (${st.join(', ')})`:''}${a.length?` — allergie: ${a.join(', ')}`:''}`; }).join('; ');
+  if(!avoid.length && !limit.length && !algLine) return `\nWie eet mee: ${who}.`;
   return `
 Houd je STRIKT aan deze voedingsregels. Ze volgen de richtlijnen van gerenommeerde instituties (Voedingscentrum, RIVM, WHO). Kies of pas het gerecht zo aan dat het veilig is voor iedereen die mee-eet. Verzin geen regels buiten deze lijst.
 Wie eet mee: ${who}.
 NIET gebruiken: ${avoid.join('; ')||'—'}.
-BEPERKEN: ${limit.join('; ')||'—'}.
+BEPERKEN: ${limit.join('; ')||'—'}.${algLine}
 Bevat een klassiek recept iets wat niet mag, geef dan een veilig alternatief in het recept zelf.`;
 }
 
@@ -1408,6 +1485,43 @@ function renderAsk(){
     </div>
     <button class="btn fill wide" id="askGo">${ic('spark','')} ${ask.count===1?'Bedenk recept':`Bedenk ${ask.count} recepten`}</button>
   `;
+}
+
+/* Wat geldt er voor déze persoon? De AI zoekt het op bij de instituties
+   en we bewaren het bij het gezinslid, zodat elk recept het meeneemt. */
+let researching = '';
+async function researchMember(id){
+  const m = S.family.find(x=>x.id===id); if(!m) return;
+  if(!aiKey()){ toast('Daarvoor heb ik een AI-sleutel nodig'); return; }
+  researching = id; if(S.view === 'member') render();
+  toast(`Uitzoeken wat geldt voor ${m.name}…`);
+  const st = (m.stages||[]).filter(x=>x!=='none').map(stageLabel);
+  const alg = memberAllergies(m);
+  const prompt = `Zoek uit welke voedingsregels gelden voor deze persoon, zodat ik daar bij het koken rekening mee houd.
+Persoon: ${m.name}${st.length?` — situatie: ${st.join(', ')}`:''}${alg.length?` — allergie: ${alg.join(', ')}`:''}${m.note?` — notitie: ${m.note}`:''}.
+Ga uit van gerenommeerde instituties: Voedingscentrum, RIVM, NVWA, het Nederlands Anafylaxis Netwerk en de WHO. Gebruik alleen wat daar staat en verzin niets.
+Schrijf in het Nederlands, per punt één korte zin, concreet over eten (ingrediënten, bereiding, hoeveelheden). Geen medisch advies, geen supplementen, geen algemene leefstijltips.
+Antwoord met UITSLUITEND geldige JSON, geen markdown:
+{"avoid":["wat deze persoon niet mag eten"],"limit":["wat beperkt moet blijven"],"ok":["waar je juist op kunt letten of wat juist goed is"],"bronnen":["Voedingscentrum — ..."]}`;
+  try{
+    const req = {model:AI_MODEL, max_tokens:1500, messages:[{role:'user', content:prompt}]};
+    if(aiOn('search')) req.tools = [{type:'web_search_20260209', name:'web_search', max_uses:3}];
+    const txt = await aiRequest(req);
+    const d = JSON.parse(extractJson(txt));
+    const cur = S.family.find(x=>x.id===id);
+    if(cur){
+      cur.ai = {
+        avoid:(d.avoid||[]).map(String), limit:(d.limit||[]).map(String),
+        ok:(d.ok||[]).map(String), bronnen:(d.bronnen||[]).map(String), when:Date.now()
+      };
+      await persist();
+      toast(`Klaar: regels voor ${cur.name} bijgewerkt`);
+    }
+  }catch(e){
+    lastAiError = e.message || String(e);
+    toast(`Uitzoeken mislukt: ${lastAiError}`);
+  }
+  researching = ''; render();
 }
 
 let careAsk = null;
@@ -1522,7 +1636,8 @@ function showCandidates(list){
       ingredients: (r.ingredients||[]).map(String),
       steps: (r.steps||[]).map(String),
       ...(Array.isArray(r.tips) && r.tips.length ? {tips:r.tips.map(tipObj)} : {}),
-      ...(r.uitleg ? {uitleg:String(r.uitleg)} : {})
+      ...(r.uitleg ? {uitleg:String(r.uitleg)} : {}),
+      ...(Array.isArray(r.letop) && r.letop.length ? {letop:r.letop.map(String)} : {})
     }));
   if(!clean.length) return false;
   suggestions = clean;
@@ -1568,7 +1683,10 @@ async function importRecipe(){
   const tweakNote = tweak ? ` Pas het recept aan volgens deze wens en verwerk dat overal — in de naam, de ingrediënten én de stappen: ${tweak}.` : '';
   const tipsNote = aiOn('tips') ? ' Geef in "tips" twee tot vier suggesties voor extra ingrediënten of kruiden. Werk elke tip uit met "tekst", "ingredienten" (met hoeveelheid), "stap" en "na" (het stapnummer waarna die stap komt).' : '';
   const uitlegNote = aiOn('uitleg') ? ' Leg in "uitleg" in twee tot vier zinnen uit hoe de belangrijkste techniek werkt en waarom je het zo doet.' : '';
-  const extraFields = `${aiOn('tips') ? ',"tips":[{"tekst":"...","ingredienten":["1 el ..."],"stap":"...","na":3}]' : ''}${aiOn('uitleg') ? ',"uitleg":"..."' : ''}`;
+  const fam = familyPrompt();
+  const famNote = fam ? `${fam}
+Botst het originele recept met deze regels? Pas het dan aan zodat het wél kan — schrijf het veilige alternatief gewoon in de ingrediënten en de stappen — en zet in "letop" per aanpassing één zin: wat je veranderde en voor wie.` : '';
+  const extraFields = `${aiOn('tips') ? ',"tips":[{"tekst":"...","ingredienten":["1 el ..."],"stap":"...","na":3}]' : ''}${aiOn('uitleg') ? ',"uitleg":"..."' : ''}${fam ? ',"letop":["..."]' : ''}`;
   $('screen').innerHTML = `<h1 class="title hand">Even lezen…</h1>
     <p class="subtitle">${isLink ? 'Ik haal het recept op en schrijf het over.' : 'Ik schrijf het recept over in jouw vorm.'}</p>${PAN_DRAWING}`;
   const prompt = `Zet het onderstaande recept om naar mijn eigen receptvorm.
@@ -1576,7 +1694,7 @@ ${isLink
   ? 'Het is een link. Open hem, of zoek het recept op als de pagina niet te lezen is, en gebruik wat er echt in staat.'
   : 'Het is geplakte tekst. Houd je aan wat er staat; vul alleen aan waar iets duidelijk ontbreekt.'}
 Blijf trouw aan het origineel: dezelfde ingrediënten en dezelfde volgorde, tenzij ik hieronder om een wijziging vraag.${tweakNote}
-Schrijf in het Nederlands, tutoyeren. Maak van elke stap één korte, duidelijke zin met de tijden én de hoeveelheden erin, zodat ik hem tijdens het koken kan volgen. Zet hoeveelheden in het metrieke stelsel (g, ml, el, tl).${tipsNote}${uitlegNote}
+Schrijf in het Nederlands, tutoyeren. Maak van elke stap één korte, duidelijke zin met de tijden én de hoeveelheden erin, zodat ik hem tijdens het koken kan volgen. Zet hoeveelheden in het metrieke stelsel (g, ml, el, tl).${tipsNote}${uitlegNote}${famNote}
 ${equipPrompt()}
 Recept:
 ${raw}
@@ -1634,7 +1752,11 @@ function withTips(r){
 /* tips en uitleg onder de stappen, alleen als ze er zijn */
 function extraBlocks(r, saved){
   const tips = (r.tips||[]).map(tipObj);
-  return `${tips.length ? `
+  return `${(r.letop||[]).length ? `
+    <div class="eyebrow"><span>Aangepast voor wie mee-eet</span></div>
+    <div class="sketch card">
+      ${r.letop.map(x=>`<div class="step"><span class="n">·</span><span class="tx">${esc(x)}</span></div>`).join('')}
+    </div>` : ''}${tips.length ? `
     <div class="eyebrow"><span>Tips</span></div>
     ${saved ? `<div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">Vink een tip aan en hij wordt in het recept en de kookstand meegenomen.</div>` : ''}
     <div class="sketch card">
@@ -1701,6 +1823,18 @@ function viewCandidate(id){
     <div class="sketch card">
       ${(c.steps||[]).map((st,i)=>`<div class="step"><span class="n hand">${i+1}</span><span class="tx">${esc(st)}</span></div>`).join('')}
     </div>
+    ${(() => {
+      const found = careFindings(c);
+      return found.length ? `
+      <div class="eyebrow"><span>Let op</span></div>
+      <div class="sketch card">
+        ${found.map(f=>`<div class="care-note">
+          <div class="who">Voor ${esc((f.who||[]).join(' en '))}</div>
+          <div class="w">${esc(f.warn)}</div>
+          <div class="f">${esc(f.fix)}</div>
+        </div>`).join('')}
+      </div>` : '';
+    })()}
     ${extraBlocks(c)}
     <button class="btn ghost wide" data-savecand="${c.id}" style="margin-top:4px">${ic('save','')} Bewaren in mijn recepten</button>
   `;
@@ -1711,6 +1845,7 @@ function saveCandidate(id){
   const rec = { id:uid(), name:c.name, type:c.type||'dinner', mins:+c.mins||0, serves:+c.serves||2, level:c.level||'easy', ingredients:c.ingredients||[], steps:c.steps||[] };
   if(Array.isArray(c.tips) && c.tips.length) rec.tips = c.tips.map(tipObj);
   if(c.uitleg) rec.uitleg = String(c.uitleg);
+  if(Array.isArray(c.letop) && c.letop.length) rec.letop = c.letop.map(String);
   S.recipes.push(rec);
   return rec;
 }
@@ -1728,16 +1863,19 @@ async function suggest(opts){
   const schijfNote = aiOn('schijf') ? ' Houd rekening met de Schijf van Vijf van het Voedingscentrum: ruim groente en fruit, volkoren, peulvruchten, noten of vis, en beperk zout, verzadigd vet en toegevoegde suiker.' : '';
   const tipsNote = aiOn('tips') ? ' Geef in "tips" twee tot vier suggesties voor extra ingrediënten, kruiden of specerijen. Werk elke tip volledig uit: "tekst" is de suggestie in één zin, "ingredienten" zijn de regels die er dan bij horen (met hoeveelheid), "stap" is de extra stap in het stappenplan en "na" het stapnummer waarna die stap komt (0 = helemaal vooraan). Zo kan ik een tip met één tik in het recept verwerken.' : '';
   const uitlegNote = aiOn('uitleg') ? ' Leg in "uitleg" in twee tot vier zinnen uit hoe de belangrijkste techniek werkt en waarom je het zo doet.' : '';
-  const extraFields = `${aiOn('tips') ? ',"tips":[{"tekst":"...","ingredienten":["1 el ..."],"stap":"...","na":3}]' : ''}${aiOn('uitleg') ? ',"uitleg":"..."' : ''}`;
   const lvl = (opts.level && opts.level !== 'any') ? opts.level : '';
   const levelNote = lvl ? ` Houd het kookniveau op ${LEVEL_NL[lvl]} — pas de techniek en het aantal stappen daarop aan.` : '';
   const mealNote = opts.meal==='lunchtogo' ? ' Het is een lunch om mee te nemen naar werk: thuis vooraf klaar te maken, lekt niet, blijft lekker koud of is makkelijk op te warmen, en past in een lunchbox of meeneembakje.' : '';
   const members = (S.family||[]).filter(m=>opts.who.includes(m.id));
   const serves = members.length || 2;
+  const famTxt = familyPrompt(members);
+  const famFields = famTxt ? ',"letop":["..."]' : '';
+  const famNote = famTxt ? ' Zet in "letop" per punt één zin over wat je aanpaste voor wie er mee-eet — laat het weg als er niets aan te passen viel.' : '';
+  const extraFields = `${aiOn('tips') ? ',"tips":[{"tekst":"...","ingredienten":["1 el ..."],"stap":"...","na":3}]' : ''}${aiOn('uitleg') ? ',"uitleg":"..."' : ''}${famFields}`;
   $('screen').innerHTML = `<h1 class="title hand">Even denken…</h1>
     <p class="subtitle">${aiOn('search')?'Ik zoek recepten op en pas ze aan':'Ik stel ${count===1?"een idee":"ideeën"} samen'} op basis van je voorkeuren.</p>${PAN_DRAWING}`;
   const prompt = `Bedenk één ${mealLabel}. In huis: ${S.pantry.length ? S.pantry.join(', ') : 'een gewone basisvoorraad'}.
-Maximaal 45 minuten, tenzij anders gevraagd. Schrijf in het Nederlands, tutoyeren. Noem in elke stap de hoeveelheden waar het om gaat (300 g, 200 ml, 1 el), zodat ik tijdens het koken niet hoef terug te bladeren.${mealNote}${mainNote}${levelNote}${wishNote}${searchNote}${schijfNote}${tipsNote}${uitlegNote}
+Maximaal 45 minuten, tenzij anders gevraagd. Schrijf in het Nederlands, tutoyeren. Noem in elke stap de hoeveelheden waar het om gaat (300 g, 200 ml, 1 el), zodat ik tijdens het koken niet hoef terug te bladeren.${mealNote}${mainNote}${levelNote}${wishNote}${searchNote}${schijfNote}${tipsNote}${uitlegNote}${famNote}
 ${equipPrompt()}${prefsPrompt(opts.prefs)}${familyPrompt(members)}
 Bedenk precies ${count} ${count===1?'recept':'verschillende recepten'} waaruit ik kan kiezen.
 Antwoord met UITSLUITEND geldige JSON, geen markdown: een array van ${count} ${count===1?'recept':'recepten'}:
@@ -2049,7 +2187,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research]');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
@@ -2242,6 +2380,7 @@ document.addEventListener('click', async (e)=>{
     }
     return;
   }
+  if(t.dataset.research){ await researchMember(t.dataset.research); return; }
   if(t.dataset.savecand){
     const rec = saveCandidate(t.dataset.savecand);
     if(rec){ await persist(); go('recipes','detail',rec.id); toast('Recept bewaard'); maybeCare(rec.id); }
@@ -2278,7 +2417,7 @@ document.addEventListener('click', async (e)=>{
     if(m){ m.eat = !m.eat; await persist(); render(); }
     return;
   }
-  if(t.dataset.stage){ t.classList.toggle('on'); return; }
+  if(t.dataset.stage || t.dataset.allergen){ t.classList.toggle('on'); return; }
   if(t.id === 'm-eat'){ t.classList.toggle('on'); return; }
   if(t.dataset.memberdel){
     const m = S.family.find(x=>x.id===t.dataset.memberdel);
@@ -2294,11 +2433,20 @@ document.addEventListener('click', async (e)=>{
       id: t.dataset.savemember === 'new' ? uid() : t.dataset.savemember,
       name, stages,
       eat: $('m-eat').classList.contains('on'),
-      note: $('m-note').value.trim()
+      note: $('m-note').value.trim(),
+      allergies: [...document.querySelectorAll('#m-allergies .chip.on')].map(c=>c.dataset.allergen),
+      allergyText: ($('m-allergytext') ? $('m-allergytext').value.trim() : '')
     };
     const i = S.family.findIndex(x=>x.id===mem.id);
+    const old = i>=0 ? S.family[i] : null;
+    /* bewaar wat de AI eerder vond, tenzij de situatie verandert */
+    const same = old && JSON.stringify([old.stages, old.allergies, old.allergyText, old.note])
+                     === JSON.stringify([mem.stages, mem.allergies, mem.allergyText, mem.note]);
+    if(same && old.ai) mem.ai = old.ai;
     if(i>=0) S.family[i] = mem; else S.family.push(mem);
     await persist(); go('profile','member',mem.id); toast('Gezinslid opgeslagen');
+    /* nieuwe situatie? dan meteen laten uitzoeken wat daarbij hoort */
+    if(!same && aiKey()) researchMember(mem.id);
     return;
   }
 

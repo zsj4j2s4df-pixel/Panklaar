@@ -20,13 +20,18 @@ het apparaat (IndexedDB).
   extra stap al klaar. Eén tik en de tip zit in het recept, de boodschappenlijst
   en de kookstand.
 - **Waarschuwing per gezinslid**: raakt een recept aan de regels van wie
-  mee-eet (alcohol, zout bij een peuter, rauw vlees bij zwangerschap …), dan
+  mee-eet (een allergie, alcohol, zout bij een peuter, rauw vlees bij
+  zwangerschap …), dan
   komt er een pop-up met de reden en wat je eraan kunt doen — met de keuze om
   dat in het recept te zetten, zodat het bij de juiste stap in de kookstand
   terugkomt.
 - **Gezinsleden** met voedingsrichtlijnen per situatie (zwanger, borstvoeding,
   peuter, kind …), gebaseerd op publieke richtlijnen van het Voedingscentrum
-  (aangevuld met RIVM/WHO). Geen persoonlijk medisch advies.
+  (aangevuld met RIVM/WHO), plus **allergieën** (de veertien wettelijke
+  allergenen en je eigen tekst). Bij het opslaan van een gezinslid zoekt de AI
+  erbij wat er voor díe persoon geldt en bewaart dat bij het lid. Alles gaat
+  daarna mee bij het bedenken én het inladen van recepten. Geen persoonlijk
+  medisch advies.
 - **Voorkeuren** (sliders voor groente/vis/vlees per week, en vinkjes als budget,
   snel, gevarieerd, past bij het weer …) en **keukenapparatuur** als richtlijnen
   voor de AI.
