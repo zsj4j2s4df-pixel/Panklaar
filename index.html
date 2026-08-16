@@ -140,6 +140,27 @@
   .draw svg .soft{stroke:var(--ink-soft);stroke-width:1.4;}
   .draw.quiet{opacity:.5;margin:22px 0 2px;}
   .draw.quiet svg{max-width:158px;}
+  /* de foto bij het recept, in een met de hand getrokken lijstje */
+  .titelrij{display:flex;gap:14px;align-items:flex-start;margin-top:6px;}
+  .titelrij .grow{min-width:0;}
+  .lijstje{position:relative;flex:none;width:104px;height:118px;padding:7px;background:none;border:none;
+    cursor:pointer;font-family:inherit;}
+  .lijstje img{width:100%;height:100%;object-fit:cover;border-radius:6px;display:block;}
+  .lijstje .kader{position:absolute;inset:0;width:100%;height:100%;fill:none;stroke:var(--ink);
+    stroke-width:2;stroke-linecap:round;filter:url(#wobble-rough);pointer-events:none;}
+  .lijstje .leeg{width:100%;height:100%;border-radius:6px;background:var(--card-2);display:flex;
+    flex-direction:column;align-items:center;justify-content:center;gap:5px;color:var(--ink-soft);}
+  .lijstje .leeg svg{width:26px;height:26px;fill:none;stroke:var(--ink-soft);stroke-width:2;
+    stroke-linecap:round;stroke-linejoin:round;}
+  .lijstje .leeg span{font-size:12px;line-height:1.2;text-align:center;padding:0 4px;}
+  .fotogroot{width:100%;border-radius:10px;display:block;}
+  .menu-item{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:var(--card);
+    border:2px solid var(--ink);filter:url(#wobble);border-radius:var(--radius);padding:13px 15px;
+    margin-bottom:10px;font-family:inherit;font-size:18px;color:var(--ink);cursor:pointer;}
+  .menu-item .ic{width:23px;height:23px;flex:none;fill:none;stroke:var(--ink);stroke-width:2;
+    stroke-linecap:round;stroke-linejoin:round;}
+  .menu-item.gevaar{color:#a02020;}
+  .menu-item.gevaar .ic{stroke:#a02020;}
   .imp-fotos{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px;}
   .imp-foto{position:relative;}
   .imp-foto img{width:88px;height:110px;object-fit:cover;border:2px solid var(--ink);
@@ -293,6 +314,12 @@
     <div class="sheet-card"></div>
   </div>
 
+  <div class="sheet" id="menu">
+    <div class="sheet-card"></div>
+  </div>
+
+  <input type="file" accept="image/*" id="rec-foto-input" style="display:none">
+
   <div class="toast" id="toast"></div>
 
   <div class="timerbar" id="timerbar"></div>
@@ -397,6 +424,7 @@ function prijsVan(model){
   Object.keys(PRIJZEN).forEach(k=>{ if(m.indexOf(k) >= 0 && k.length > lang){ beste = PRIJZEN[k]; lang = k.length; } });
   return beste || PRIJZEN['claude-sonnet'];
 }
+const PRIJS_BEELD = 0.02;   /* ruwe schatting per gemaakt plaatje (gpt-image-1, klein) */
 const PRIJS_NOOT = 'Prijzen per miljoen tokens, zoeken per duizend acties. Ze staan in de code onder PRIJZEN — klopt er iets niet meer, dan pas je ze daar aan.';
 const maandNu = () => new Date().toISOString().slice(0,7);
 const MAAND_NL = ['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
@@ -1118,6 +1146,19 @@ function viewRecipes(){
   `;
 }
 
+/* het lijstje om de foto — twee keer met de hand getrokken, zoals de rest */
+function fotoLijstje(r){
+  const kader = `<svg class="kader" viewBox="0 0 104 118" preserveAspectRatio="none">
+      <path d="M4 6 C34 3 72 4 100 5 C101 40 100 78 99 113 C68 115 34 114 5 113 C3 78 4 40 4 6"/>
+      <path d="M5.6 7.4 C35 4.6 73 5.6 98.4 6.6 C99.6 41 98.6 79 97.4 111.4 C67 113.6 33 112.6 6.6 111.4 C5 77 6 39 5.6 7.4"/>
+    </svg>`;
+  return `<button class="lijstje" data-recfoto="${r.id}" aria-label="${r.foto ? 'Foto bekijken of vervangen' : 'Foto toevoegen'}">
+    ${r.foto ? `<img src="${r.foto}" alt="Foto van ${esc(r.name)}">`
+             : `<div class="leeg"><svg viewBox="0 0 24 24">${I.camera}</svg><span>foto erbij</span></div>`}
+    ${kader}
+  </button>`;
+}
+
 function viewDetail(id){
   const r = S.recipes.find(x=>x.id===id);
   if(!r) return viewRecipes();
@@ -1130,8 +1171,13 @@ function viewDetail(id){
       <button class="back" data-tab="recipes" aria-label="Terug">${ic('back','')}</button>
       <button class="icon-btn" data-go="edit" data-id="${r.id}" aria-label="Recept bewerken">${ic('edit','')}</button>
     </div>
-    <h1 class="title hand" style="font-size:36px;margin-top:6px">${esc(r.name)}</h1>
-    <p class="subtitle">${typeOf(r.type).label}</p>
+    <div class="titelrij">
+      <div class="grow">
+        <h1 class="title hand" style="font-size:36px;margin:0">${esc(r.name)}</h1>
+        <p class="subtitle">${typeOf(r.type).label}</p>
+      </div>
+      ${fotoLijstje(r)}
+    </div>
     <div class="sketch card" style="background:var(${typeOf(r.type).v})">
       <div class="stat-grid">
         <div class="stat"><div class="k">Tijd</div><div class="v hand">${r.mins}′</div></div>
@@ -1178,6 +1224,7 @@ function viewDetail(id){
 function viewEdit(id){
   const r = id ? S.recipes.find(x=>x.id===id) : null;
   const d = r || {name:'',type:'dinner',mins:30,serves:2,level:'easy',ingredients:[],steps:[]};
+  const tipsTxt = (d.tips||[]).map(t=>tipObj(t).text).join('\n');
   return `
     <div class="detail-top">
       <button class="back" data-tab="recipes" aria-label="Terug">${ic('back','')}</button>
@@ -1212,6 +1259,21 @@ function viewEdit(id){
       <label for="f-steps">Stappen — één per regel</label>
       <textarea class="inp" id="f-steps" rows="7" placeholder="Kook de pasta 9 min.&#10;Roer de pesto erdoor.">${esc(d.steps.join('\n'))}</textarea>
     </div>
+    <div class="field">
+      <label for="f-tips">Tips — één per regel</label>
+      <textarea class="inp" id="f-tips" rows="3" placeholder="Een handvol geroosterde pijnboompitten erover.">${esc(tipsTxt)}</textarea>
+    </div>
+    <div class="field">
+      <label for="f-uitleg">Waarom zo? (optioneel)</label>
+      <textarea class="inp" id="f-uitleg" rows="3" placeholder="Waarom je het op deze manier doet.">${esc(d.uitleg||'')}</textarea>
+    </div>
+    ${r ? `<div class="field">
+      <label>Foto</label>
+      <div class="split">
+        <button class="btn" id="f-foto" style="flex:1">${ic('camera','')} ${d.foto ? 'Foto vervangen' : 'Foto toevoegen'}</button>
+        ${d.foto ? `<button class="btn ghost" data-fotoweg="${r.id}" aria-label="Foto weghalen">${ic('trash','')}</button>` : ''}
+      </div>
+    </div>` : ''}
     <button class="btn fill wide" data-save="${r ? r.id : 'new'}">${ic('check','')} Recept opslaan</button>
   `;
 }
@@ -1779,6 +1841,66 @@ function toonBudgetMelding(grens, m, b){
   $('warn').classList.add('on');
 }
 
+/* Klein keuzemenu — voor de foto en voor lang indrukken op een recept */
+let menuData = null;
+function openMenu(titel, items){
+  menuData = {titel, items};
+  $('menu').querySelector('.sheet-card').innerHTML = `
+    <div class="cook-head" style="margin-bottom:12px">
+      <span class="h hand" style="font-size:25px">${esc(titel)}</span>
+      <button class="back" id="menuClose" aria-label="Sluiten"><svg viewBox="0 0 24 24"><path d="M18.4 5.4 5.7 18.3M5.5 5.6l12.9 12.7"/></svg></button>
+    </div>
+    ${items.map((it,i)=>`<button class="menu-item ${it.gevaar?'gevaar':''}" data-menu="${i}">
+      <svg class="ic" viewBox="0 0 24 24">${I[it.icon] || I.chev}</svg>
+      <span>${esc(it.label)}</span>
+    </button>`).join('')}`;
+  $('menu').classList.add('on');
+}
+function closeMenu(){ $('menu').classList.remove('on'); menuData = null; }
+
+/* de foto van een recept: zelf kiezen, laten maken, bekijken of weghalen */
+let fotoVoor = null;
+function fotoMenu(id){
+  const r = S.recipes.find(x=>x.id===id); if(!r) return;
+  fotoVoor = id;
+  const items = [];
+  if(r.foto) items.push({label:'Foto groot bekijken', icon:'camera', doe:()=>{ closeMenu(); toonReceptFoto(r.id); }});
+  items.push({label: r.foto ? 'Andere foto kiezen' : 'Foto kiezen of maken', icon:'camera',
+    doe:()=>{ closeMenu(); $('rec-foto-input').click(); }});
+  items.push({label:'Laat de AI er een maken', icon:'spark', doe:async ()=>{
+    closeMenu();
+    const f = await fotoVanAi(r);
+    if(f){ r.foto = f; await persist(); render(); toast('Plaatje toegevoegd'); }
+  }});
+  if(r.foto) items.push({label:'Foto weghalen', icon:'trash', gevaar:true, doe:async ()=>{
+    closeMenu(); delete r.foto; await persist(); render(); toast('Foto weg');
+  }});
+  openMenu(r.name, items);
+}
+function toonReceptFoto(id){
+  const r = S.recipes.find(x=>x.id===id); if(!r || !r.foto) return;
+  openMenu(r.name, [{label:'Sluiten', icon:'back', doe:closeMenu}]);
+  const kaart = $('menu').querySelector('.sheet-card');
+  const beeld = document.createElement('img');
+  beeld.className = 'fotogroot'; beeld.src = r.foto; beeld.alt = `Foto van ${r.name}`;
+  kaart.insertBefore(beeld, kaart.children[1]);
+}
+/* lang indrukken op een recept: bewerken, foto of weggooien */
+function receptMenu(id){
+  const r = S.recipes.find(x=>x.id===id); if(!r) return;
+  openMenu(r.name, [
+    {label:'Bekijken', icon:'book', doe:()=>{ closeMenu(); go('recipes','detail',id); maybeCare(id); }},
+    {label:'Bewerken', icon:'edit', doe:()=>{ closeMenu(); go('recipes','edit',id); }},
+    {label:'Foto', icon:'camera', doe:()=>{ closeMenu(); fotoMenu(id); }},
+    {label:'Verwijderen', icon:'trash', gevaar:true, doe:async ()=>{
+      closeMenu();
+      S.recipes = S.recipes.filter(x=>x.id!==id);
+      Object.keys(S.plan).forEach(d=>{ if(S.plan[d]===id) delete S.plan[d]; });
+      await persist(); go('recipes'); toast(`${r.name} verwijderd`);
+    }}
+  ]);
+}
+
 let careAsk = null;
 function maybeCare(id){
   const r = S.recipes.find(x=>x.id===id);
@@ -1815,6 +1937,65 @@ function renderCare(){
     <div class="muted" style="font-size:13px;margin:12px 4px 0;line-height:1.45">
       Volgens de richtlijnen van het Voedingscentrum. Geen medisch advies — overleg bij twijfel met je verloskundige, huisarts of het consultatiebureau.
     </div>`;
+}
+
+/* Foto's kleiner maken voordat ze in de opslag gaan — anders staat er zo
+   een paar megabyte per recept in. */
+function schaalFoto(dataUrl, max, kwal){
+  max = max || 900; kwal = kwal || 0.82;
+  return new Promise((res, rej)=>{
+    const img = new Image();
+    img.onload = ()=>{
+      const f = Math.min(1, max / Math.max(img.width, img.height));
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(img.width * f); cv.height = Math.round(img.height * f);
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(img, 0, 0, cv.width, cv.height);
+      try{ res(cv.toDataURL('image/jpeg', kwal)); }catch(e){ res(dataUrl); }
+    };
+    img.onerror = ()=>rej(new Error('Die foto kon ik niet lezen'));
+    img.src = dataUrl;
+  });
+}
+function bestandNaarFoto(file){
+  return new Promise((res, rej)=>{
+    const r = new FileReader();
+    r.onload = ()=>schaalFoto(String(r.result)).then(res, rej);
+    r.onerror = ()=>rej(new Error('Die foto kon ik niet lezen'));
+    r.readAsDataURL(file);
+  });
+}
+
+/* Een plaatje láten maken kan alleen bij OpenAI; Claude maakt geen beelden. */
+async function fotoVanAi(r){
+  if(dienstId() !== 'openai'){
+    toast('Plaatjes maken kan alleen met OpenAI — kies die bij Jij → AI-dienst');
+    return null;
+  }
+  if(!aiKey()){ toast('Vul eerst je OpenAI-sleutel in bij Jij'); return null; }
+  toast('Plaatje maken…');
+  const prompt = `Een smakelijke foto van dit gerecht, van bovenaf op een eenvoudig bord, daglicht, geen tekst en geen mensen: ${r.name}. Belangrijkste ingrediënten: ${(r.ingredients||[]).slice(0,6).join(', ')}.`;
+  let res;
+  try{
+    res = await fetch('https://api.openai.com/v1/images/generations', {
+      method:'POST', headers:aiHeaders(),
+      body: JSON.stringify({model:'gpt-image-1', prompt, size:'1024x1024', quality:'low', n:1})
+    });
+  }catch(e){ toast('Geen verbinding met OpenAI'); return null; }
+  let data;
+  try{ data = await res.json(); }catch(e){ data = null; }
+  if(!res.ok || !data || data.error || !data.data || !data.data[0]){
+    lastAiError = (data && data.error && data.error.message) || `status ${res.status}`;
+    toast(lastAiError); return null;
+  }
+  const d = data.data[0];
+  const ruw = d.b64_json ? `data:image/png;base64,${d.b64_json}` : d.url;
+  if(!ruw){ toast('Geen plaatje teruggekregen'); return null; }
+  /* het plaatje telt mee in het kostenoverzicht */
+  const m = maandVak(maandNu());
+  m.calls += 1; m.kosten += PRIJS_BEELD;
+  try{ return await schaalFoto(ruw, 900, 0.85); }catch(e){ return ruw; }
 }
 
 function fileToB64(file){
@@ -2575,8 +2756,9 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,#imp-foto-btn,[data-fotorm],[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research],#ai-budget-save,#ai-usage-reset,#warnClose,#warnOk,#warnGo,[data-dienst],#ai-model-save');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,#imp-foto-btn,[data-fotorm],[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research],#ai-budget-save,#ai-usage-reset,#warnClose,#warnOk,#warnGo,[data-dienst],#ai-model-save,[data-recfoto],#f-foto,[data-fotoweg],[data-menu],#menuClose');
   if(!t) return;
+  if(slikKlik){ slikKlik = false; return; }
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
   if(t.dataset.open){ go('recipes','detail',t.dataset.open); maybeCare(t.dataset.open); return; }
@@ -2594,7 +2776,10 @@ document.addEventListener('click', async (e)=>{
   if(t.dataset.save){
     const name = $('f-name').value.trim();
     if(!name){ toast('Geef het recept eerst een naam'); return; }
+    const oud = S.recipes.find(r=>r.id===t.dataset.save) || {};
     const rec = {
+      /* alles wat niet in het formulier staat (foto, let op, care) blijft staan */
+      ...oud,
       id: t.dataset.save === 'new' ? uid() : t.dataset.save,
       name,
       type: (document.querySelector('#f-type .chip.on')||{}).dataset?.type || 'dinner',
@@ -2604,6 +2789,16 @@ document.addEventListener('click', async (e)=>{
       ingredients: $('f-ing').value.split('\n').map(s=>s.trim()).filter(Boolean),
       steps: $('f-steps').value.split('\n').map(s=>s.trim()).filter(Boolean)
     };
+    /* tips: tekst uit het veld, maar hou de uitgewerkte versie van dezelfde tip */
+    const oudeTips = (oud.tips||[]).map(tipObj);
+    const tipRegels = ($('f-tips') ? $('f-tips').value : '').split('\n').map(x=>x.trim()).filter(Boolean);
+    if(tipRegels.length) rec.tips = tipRegels.map(tekst=>{
+      const hit = oudeTips.find(o=>o.text === tekst);
+      return hit || tipObj(tekst);
+    });
+    else delete rec.tips;
+    const uitleg = ($('f-uitleg') ? $('f-uitleg').value : '').trim();
+    if(uitleg) rec.uitleg = uitleg; else delete rec.uitleg;
     const i = S.recipes.findIndex(r=>r.id===rec.id);
     if(i>=0 && S.recipes[i].have) rec.have = S.recipes[i].have.filter(h=>rec.ingredients.includes(h));
     if(i>=0) S.recipes[i] = rec; else S.recipes.push(rec);
@@ -2693,6 +2888,19 @@ document.addEventListener('click', async (e)=>{
   if(t.id === 'pan-photo-btn'){ $('pan-photo-input').click(); return; }
   if(t.id === 'imp-file-btn'){ $('imp-file').click(); return; }
   if(t.id === 'imp-foto-btn'){ leesImpVelden(); $('imp-foto').click(); return; }
+  if(t.dataset.recfoto){ fotoMenu(t.dataset.recfoto); return; }
+  if(t.id === 'f-foto'){ fotoVoor = S.arg; $('rec-foto-input').click(); return; }
+  if(t.dataset.fotoweg){
+    const r = S.recipes.find(x=>x.id===t.dataset.fotoweg);
+    if(r){ delete r.foto; await persist(); render(); toast('Foto weg'); }
+    return;
+  }
+  if(t.id === 'menuClose'){ closeMenu(); return; }
+  if(t.dataset.menu !== undefined && menuData){
+    const it = menuData.items[+t.dataset.menu];
+    if(it && it.doe) await it.doe();
+    return;
+  }
   if(t.dataset.fotorm !== undefined){
     leesImpVelden();
     impFotos.splice(+t.dataset.fotorm, 1);
@@ -2881,6 +3089,67 @@ document.addEventListener('keydown', e=>{
   if(e.target.id === 'cookQ'){ $('cookQGo').click(); }
 });
 
+/* ---------------- aanraken: lang indrukken en terugvegen ----------------
+   Eén paar luisteraars voor allebei. Lang indrukken op een receptkaart opent
+   het menu; een veeg van links naar rechts gaat terug. Beweegt de vinger
+   voor de 380 ms meer dan 8 px, dan is het geen lange druk maar een veeg. */
+let raak = null, drukKlok = null, slikKlik = false;
+
+/* waar 'terug' heen gaat, gezien wat er nu openstaat */
+function veegTerug(){
+  if(menuData){ closeMenu(); return true; }
+  if($('care').classList.contains('on')){ $('care').classList.remove('on'); careAsk = null; return true; }
+  if($('warn').classList.contains('on')){ $('warn').classList.remove('on'); return true; }
+  if($('ask').classList.contains('on')){ closeAsk(); return true; }
+  if($('cook').classList.contains('on')){ closeCook(); return true; }
+  if(S.view === 'cand'){ go('recipes','picks'); return true; }
+  if(S.view === 'member' || S.view === 'memberEdit'){ go('profile'); return true; }
+  if(S.view){ go(S.tab); return true; }
+  if(S.tab !== 'home'){ go('home'); return true; }
+  return false;
+}
+/* niet vegen midden in een schuifbalk of een tekstveld */
+function veegMag(el){
+  return !(el && el.closest && el.closest('input[type=range], textarea, select, .imp-fotos, .chips'));
+}
+
+document.addEventListener('pointerdown', e=>{
+  if(e.pointerType === 'mouse' && e.button !== 0) return;
+  /* een vorige veeg zonder klik erna mag de volgende tik niet opeten */
+  slikKlik = false;
+  raak = {x:e.clientX, y:e.clientY, t:Date.now(), veeg:veegMag(e.target)};
+  const kaart = e.target.closest && e.target.closest('[data-open]');
+  if(kaart){
+    drukKlok = setTimeout(()=>{
+      drukKlok = null; slikKlik = true; raak = null;
+      if(navigator.vibrate) try{ navigator.vibrate(12); }catch(_){}
+      receptMenu(kaart.dataset.open);
+    }, 380);
+  }
+}, {passive:true});
+
+document.addEventListener('pointermove', e=>{
+  if(!raak) return;
+  if(drukKlok && Math.hypot(e.clientX - raak.x, e.clientY - raak.y) > 8){
+    clearTimeout(drukKlok); drukKlok = null;
+  }
+}, {passive:true});
+
+document.addEventListener('pointerup', e=>{
+  if(drukKlok){ clearTimeout(drukKlok); drukKlok = null; }
+  if(!raak) return;
+  const dx = e.clientX - raak.x, dy = e.clientY - raak.y, tijd = Date.now() - raak.t;
+  const r = raak; raak = null;
+  if(!r.veeg) return;
+  if(dx > 70 && Math.abs(dy) < 45 && tijd < 700){
+    if(veegTerug()) slikKlik = true;
+  }
+}, {passive:true});
+document.addEventListener('pointercancel', ()=>{
+  if(drukKlok){ clearTimeout(drukKlok); drukKlok = null; }
+  raak = null;
+}, {passive:true});
+
 document.addEventListener('change', async e=>{
   if(e.target.dataset.day !== undefined){
     const d = e.target.dataset.day;
@@ -2890,6 +3159,16 @@ document.addEventListener('change', async e=>{
   if(e.target.dataset.slider){ S.prefs[e.target.dataset.slider] = +e.target.value; await persist(); }
   if(e.target.id === 'pan-photo-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; if(f) scanPantry(f); }
   if(e.target.id === 'imp-file'){ const f = e.target.files && e.target.files[0]; e.target.value=''; if(f) loadRecipeFile(f); }
+  if(e.target.id === 'rec-foto-input'){
+    const f = e.target.files && e.target.files[0]; e.target.value = '';
+    if(f && fotoVoor){
+      const r = S.recipes.find(x=>x.id===fotoVoor);
+      try{
+        const foto = await bestandNaarFoto(f);
+        if(r){ r.foto = foto; await persist(); render(); toast('Foto toegevoegd'); }
+      }catch(err){ toast(err.message || 'Die foto kon ik niet lezen'); }
+    }
+  }
   if(e.target.id === 'imp-foto'){ const fs = e.target.files; const lijst = fs ? [].slice.call(fs) : []; e.target.value=''; if(lijst.length) voegFotosToe(lijst); }
   /* sleutel ook bewaren als je het veld verlaat zonder op ✓ te drukken */
   if(e.target.id === 'ai-key'){ saveAiKey(e.target.value); }

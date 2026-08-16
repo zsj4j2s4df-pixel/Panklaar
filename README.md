@@ -7,7 +7,14 @@ het apparaat (IndexedDB).
 ## Wat zit erin
 
 - **Recepten** bijhouden, bekijken en bewerken, met categorieën (ontbijt, lunch,
-  lunch to go, diner, bijgerecht, zoet).
+  lunch to go, diner, bijgerecht, zoet). Elk recept kan een **foto** hebben naast
+  de titel, in een met de hand getrokken lijstje: zelf een foto kiezen of maken,
+  of er met OpenAI een laten maken. Alles is later te bewerken — ook de tips en
+  de uitleg — en **lang indrukken** op een recept geeft bekijken, bewerken, foto
+  of verwijderen.
+- **Terugvegen**: een veeg van links naar rechts gaat overal terug — een pop-up
+  dicht, uit de kookstand, van een recept naar de lijst, en van een tabblad naar
+  Start.
 - **Kookstand** met stap-voor-stap uitleg, een preview van de volgende stap, de
   **hoeveelheden die bij de stap horen**, en **meerdere timers die blijven
   doorlopen** — ook buiten de kookstand — met een labeltje dat het ingrediënt
