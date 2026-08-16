@@ -1,0 +1,745 @@
+<style>
+/* ============================================================
+   Aanwijs-laag — wordt bij het bouwen van de nakijkversie in de
+   app geplakt. Alle namen beginnen met ann- zodat er niets van
+   de app zelf onder komt te zitten.
+   ============================================================ */
+#annRoot{position:absolute;inset:0;z-index:9000;pointer-events:none;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  -webkit-user-select:none;user-select:none;}
+#annRoot *{box-sizing:border-box;}
+#annVel{position:absolute;inset:0;pointer-events:none;touch-action:none;}
+#annRoot.aan #annVel{pointer-events:auto;}
+#annSvg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:hidden;}
+
+#annBar{position:fixed;right:12px;bottom:12px;z-index:9002;display:flex;flex-direction:column;
+  align-items:flex-end;gap:8px;pointer-events:auto;}
+#annTools{display:none;flex-direction:column;gap:6px;background:rgba(28,28,30,.92);border-radius:14px;
+  padding:6px;box-shadow:0 6px 22px rgba(0,0,0,.3);}
+#annRoot.aan #annTools{display:flex;}
+#annTools button{width:44px;height:38px;border:none;border-radius:10px;background:transparent;color:#fff;
+  font-size:17px;cursor:pointer;line-height:1;}
+#annTools button.on{background:#fff;color:#1c1c1e;}
+#annKnop{width:52px;height:52px;border-radius:50%;border:none;background:#1c1c1e;color:#fff;font-size:22px;
+  cursor:pointer;box-shadow:0 6px 22px rgba(0,0,0,.35);line-height:1;}
+#annRoot.aan #annKnop{background:#e63946;}
+#annLijstKnop{position:fixed;left:12px;bottom:12px;z-index:9002;pointer-events:auto;display:none;
+  border:none;border-radius:22px;background:#1c1c1e;color:#fff;font-size:14px;padding:11px 15px;cursor:pointer;
+  box-shadow:0 6px 22px rgba(0,0,0,.35);}
+#annRoot.aan #annLijstKnop{display:block;}
+#annGroepBadge{display:none;align-items:center;gap:6px;background:#fff;color:#1c1c1e;border-radius:20px;
+  padding:7px 12px;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.25);cursor:pointer;}
+#annRoot.aan #annGroepBadge.aan{display:flex;}
+
+#annPaneel,#annFoto{position:fixed;inset:0;z-index:9003;background:rgba(20,20,22,.55);
+  display:none;pointer-events:auto;}
+#annPaneel.aan,#annFoto.aan{display:block;}
+#annVak{position:absolute;left:0;right:0;bottom:0;top:26px;background:#f7f6f3;border-radius:18px 18px 0 0;
+  display:flex;flex-direction:column;overflow:hidden;}
+#annKop{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;
+  border-bottom:1px solid #e2e0da;font-size:16px;font-weight:600;color:#1c1c1e;background:#fff;}
+#annKop button{border:none;background:#eceae4;border-radius:9px;padding:7px 11px;font-size:14px;cursor:pointer;}
+#annBody{flex:1;overflow-y:auto;padding:12px 14px 20px;}
+#annVoet{padding:10px 14px 16px;border-top:1px solid #e2e0da;background:#fff;display:flex;gap:8px;}
+#annVoet button{flex:1;border:none;border-radius:11px;padding:12px;font-size:15px;cursor:pointer;
+  background:#1c1c1e;color:#fff;}
+#annVoet button.tweede{background:#eceae4;color:#1c1c1e;}
+.annPunt{background:#fff;border-radius:14px;padding:10px 12px;margin-bottom:11px;border:1px solid #e2e0da;}
+.annPuntKop{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+.annBol{width:23px;height:23px;border-radius:50%;color:#fff;font-size:13px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;flex:none;}
+.annPlek{font-size:13px;color:#4a4a4f;line-height:1.4;margin:2px 0 2px 31px;}
+.annPlek .pag{color:#8a8a8f;}
+.annPunt textarea{width:100%;min-height:56px;border:1px solid #ddd9d0;border-radius:10px;padding:9px;
+  font-size:15px;font-family:inherit;resize:vertical;background:#fdfdfc;color:#1c1c1e;}
+.annPuntVoet{display:flex;gap:8px;margin-top:7px;}
+.annPuntVoet button{border:none;background:#eceae4;border-radius:9px;padding:7px 10px;font-size:13px;cursor:pointer;}
+.annPuntVoet button.weg{margin-left:auto;background:#fbe9e9;color:#a02020;}
+#annFotos{display:flex;gap:8px;overflow-x:auto;padding-bottom:10px;margin-bottom:6px;}
+#annFotos img{height:96px;border-radius:10px;border:1px solid #d8d5cd;background:#fff;cursor:pointer;flex:none;}
+#annUitkomst{width:100%;min-height:210px;border:1px solid #ddd9d0;border-radius:12px;padding:11px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.5;background:#fff;
+  color:#1c1c1e;white-space:pre;}
+#annLeeg{color:#8a8a8f;font-size:14px;text-align:center;padding:26px 10px;line-height:1.5;}
+#annFotoVak{position:absolute;inset:0;display:flex;flex-direction:column;background:#111;}
+#annFotoVak img{flex:1;min-height:0;object-fit:contain;width:100%;}
+#annFotoVak .rij{display:flex;gap:8px;padding:12px;background:#1c1c1e;}
+#annFotoVak .rij button{flex:1;border:none;border-radius:11px;padding:12px;font-size:15px;cursor:pointer;
+  background:#eceae4;color:#1c1c1e;}
+#annFotoVak .tip{color:#b9b7b1;font-size:12.5px;text-align:center;padding:0 14px 10px;background:#1c1c1e;line-height:1.4;}
+</style>
+<script>
+(function(){
+  'use strict';
+  if(window.__ann) return;
+
+  var KLEUREN = ['#e63946','#1d7874','#e07a1f','#3d5a99','#8a4fbd'];
+  var SOORTEN = {punt:'aanwijzen', pijl:'pijl', dubbel:'dubbele pijl', cirkel:'omcirkel'};
+
+  var marks = [];      /* {grp,soort,pag,x,y,x2,y2,p,anker,anker2} — in de inhoud van het scrollvlak */
+  var opdr  = [];      /* {n,tekst} */
+  var fotos = [];      /* {n,png,punten,pag} */
+  var aan = false, gereed = 'punt', bijGroep = null, bezig = null, pagina = '';
+  var root, sc, laag, vel, svg, g, paneel, fotoLaag, lijstKnop, badge;
+
+  /* ---------- kleine hulpjes ---------- */
+  function el(tag, cls, txt){ var e = document.createElement(tag); if(cls) e.className = cls;
+    if(txt != null) e.textContent = txt; return e; }
+  function kleur(n){ return KLEUREN[(n-1) % KLEUREN.length]; }
+  function zichtbaar(e){
+    if(!e || !e.getBoundingClientRect) return false;
+    var r = e.getBoundingClientRect();
+    if(r.width < 2 || r.height < 2) return false;
+    var st = getComputedStyle(e);
+    return st.display !== 'none' && st.visibility !== 'hidden' && +st.opacity > .05;
+  }
+  function kort(s, n){ s = String(s || '').replace(/\s+/g,' ').trim(); n = n || 45;
+    return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+
+  /* ---------- welk vlak scrollt er eigenlijk? ---------- */
+  function zoekScroll(){
+    var beste = null, opp = 0;
+    var alles = root.querySelectorAll('*');
+    for(var i = 0; i < alles.length; i++){
+      var e = alles[i];
+      if(e.closest('#annRoot')) continue;
+      if(!zichtbaar(e)) continue;
+      var st = getComputedStyle(e);
+      var kan = /auto|scroll/.test(st.overflowY);
+      if(!kan) continue;
+      var r = e.getBoundingClientRect();
+      var o = r.width * r.height;
+      if(o > opp){ opp = o; beste = e; }
+    }
+    return beste || root;
+  }
+
+  /* ---------- niet bovenop de eigen balk van de app gaan zitten ---------- */
+  function bodemMarge(){
+    var rr = root.getBoundingClientRect(), hoog = 0;
+    var kans = root.querySelectorAll('nav, footer, [class*="nav"], [class*="tabbar"], [class*="bottom"]');
+    for(var i = 0; i < kans.length; i++){
+      var e = kans[i];
+      if(e.closest('#annRoot') || !zichtbaar(e)) continue;
+      var st = getComputedStyle(e);
+      if(st.position !== 'fixed' && st.position !== 'absolute' && st.position !== 'sticky') continue;
+      var r = e.getBoundingClientRect();
+      if(r.bottom > rr.bottom - 4 && r.height < rr.height * .35) hoog = Math.max(hoog, r.height);
+    }
+    return Math.round(hoog) + 12;
+  }
+  function zetMarge(){
+    var m = bodemMarge() + 'px';
+    if(laag.querySelector('#annBar').style.bottom !== m){
+      laag.querySelector('#annBar').style.bottom = m;
+      lijstKnop.style.bottom = m;
+    }
+  }
+
+  /* ---------- op welke pagina staan we? ---------- */
+  function overlayNaam(){
+    var kids = root.children, uit = '';
+    for(var i = 0; i < kids.length; i++){
+      var e = kids[i];
+      if(e.id === 'annRoot' || !e.id) continue;
+      if(!zichtbaar(e)) continue;
+      var st = getComputedStyle(e);
+      if(st.position !== 'absolute' && st.position !== 'fixed') continue;
+      if((+st.zIndex || 0) < 40) continue;
+      var r = e.getBoundingClientRect(), rr = root.getBoundingClientRect();
+      if(r.width * r.height > rr.width * rr.height * .5) uit = e.id;
+    }
+    return uit;
+  }
+  function paginaNu(){
+    var w = window.currentPage || window.CURRENT_PAGE || window.huidigePagina;
+    if(typeof w === 'string' && w) return kort(w, 28);
+    var p = [].slice.call(document.querySelectorAll('[id^="page-"]')).filter(zichtbaar)[0];
+    if(p) return kort(p.id.replace(/^page-/, ''), 28);
+    var ov = overlayNaam();
+    if(ov) return kort(ov, 28);
+    var tab = root.querySelector('nav .on, .nav .on, [role="tab"][aria-selected="true"], .tab.active, .tabs .active');
+    var naam = tab ? kort((tab.innerText || '').split('\n')[0], 18).toLowerCase() : '';
+    var kop = [].slice.call(root.querySelectorAll('h1, .detail-top .h, [role="heading"]')).filter(zichtbaar)[0];
+    var kt = kop ? kort((kop.innerText || '').split('\n')[0], 22) : '';
+    if(naam && kt && kt.toLowerCase() !== naam) return naam + ' · ' + kt;
+    return naam || kt || kort((document.title || 'pagina').split(/[—|-]/)[0], 22);
+  }
+
+  /* ---------- het anker: het label onder je vinger ---------- */
+  function labelVan(e){
+    if(!e || e.nodeType !== 1) return '';
+    var at = e.getAttribute('aria-label') || e.getAttribute('placeholder') || e.getAttribute('title');
+    if(at && at.trim()) return kort(at);
+    if(e.tagName === 'INPUT' || e.tagName === 'TEXTAREA'){
+      if(e.value) return kort(e.value);
+      return '';
+    }
+    if(e.tagName === 'IMG' && e.alt) return kort(e.alt);
+    /* innerText, niet textContent: die plakt losse spans aan elkaar */
+    var t = (e.innerText || '').split('\n')[0].trim();
+    if(t && t.length <= 45) return kort(t);
+    return '';
+  }
+  function ankerOp(cx, cy){
+    var els = document.elementsFromPoint(cx, cy);
+    for(var i = 0; i < els.length; i++){
+      var e = els[i];
+      if(e.closest && e.closest('#annRoot')) continue;
+      var l = labelVan(e);
+      if(l) return l;
+    }
+    return 'hier';
+  }
+
+  /* ---------- coördinaten: altijd in de inhoud van het scrollvlak ---------- */
+  function naarInhoud(cx, cy){
+    var r = sc.getBoundingClientRect();
+    return {x: cx - r.left + sc.scrollLeft, y: cy - r.top + sc.scrollTop};
+  }
+  function zetShift(){
+    if(!g) return;
+    var r = sc.getBoundingClientRect(), rr = root.getBoundingClientRect();
+    var dx = r.left - rr.left - sc.scrollLeft;
+    var dy = r.top - rr.top - sc.scrollTop;
+    g.setAttribute('transform', 'translate(' + dx + ',' + dy + ')');
+  }
+
+  /* ---------- tekenen ---------- */
+  function bolTxt(n, x, y){
+    var c = kleur(n);
+    return '<circle cx="' + x + '" cy="' + y + '" r="11.5" fill="' + c + '" stroke="#fff" stroke-width="2"/>' +
+           '<text x="' + x + '" y="' + (y + 4.4) + '" text-anchor="middle" font-size="12.5" font-weight="700"' +
+           ' fill="#fff" font-family="-apple-system,sans-serif">' + n + '</text>';
+  }
+  function pijlPunt(x1, y1, x2, y2, c){
+    var a = Math.atan2(y2 - y1, x2 - x1), L = 13, s = .45;
+    return '<path d="M' + x2 + ' ' + y2 + ' L' + (x2 - L * Math.cos(a - s)) + ' ' + (y2 - L * Math.sin(a - s)) +
+           ' M' + x2 + ' ' + y2 + ' L' + (x2 - L * Math.cos(a + s)) + ' ' + (y2 - L * Math.sin(a + s)) +
+           '" stroke="' + c + '" stroke-width="3.2" fill="none" stroke-linecap="round"/>';
+  }
+  function tekenMark(m){
+    var c = kleur(m.grp || 1), o = '';
+    if(m.soort === 'punt'){
+      o += '<circle cx="' + m.x + '" cy="' + m.y + '" r="17" fill="' + c + '" fill-opacity=".16" stroke="' + c + '" stroke-width="2.4"/>';
+      o += bolTxt(m.grp, m.x, m.y);
+    } else if(m.soort === 'pijl' || m.soort === 'dubbel'){
+      o += '<line x1="' + m.x + '" y1="' + m.y + '" x2="' + m.x2 + '" y2="' + m.y2 + '" stroke="' + c + '" stroke-width="3.2" stroke-linecap="round"/>';
+      o += pijlPunt(m.x, m.y, m.x2, m.y2, c);
+      if(m.soort === 'dubbel') o += pijlPunt(m.x2, m.y2, m.x, m.y, c);
+      o += bolTxt(m.grp, (m.x + m.x2) / 2, (m.y + m.y2) / 2);
+    } else if(m.soort === 'cirkel'){
+      var p = m.p || [];
+      if(p.length > 1){
+        var d = 'M' + p[0].x + ' ' + p[0].y;
+        for(var i = 1; i < p.length; i++) d += ' L' + p[i].x + ' ' + p[i].y;
+        d += ' Z';
+        o += '<path d="' + d + '" fill="' + c + '" fill-opacity=".1" stroke="' + c + '" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>';
+        o += bolTxt(m.grp, p[0].x, p[0].y);
+      }
+    }
+    return o;
+  }
+  function tekenAlles(){
+    if(!g) return;
+    var uit = '';
+    marks.forEach(function(m){ if(m.pag === pagina) uit += tekenMark(m); });
+    if(bezig) uit += tekenMark(bezig);
+    g.innerHTML = uit;
+    zetShift();
+    if(lijstKnop) lijstKnop.textContent = '📝 ' + opdr.length + (opdr.length === 1 ? ' punt' : ' punten');
+  }
+
+  /* ---------- punten en opdrachten ---------- */
+  function volgendNr(){
+    var n = 0; opdr.forEach(function(o){ if(o.n > n) n = o.n; }); return n + 1;
+  }
+  function voegToe(m){
+    var n = bijGroep || volgendNr();
+    m.grp = n;
+    if(!opdr.some(function(o){ return o.n === n; })) opdr.push({n: n, tekst: ''});
+    marks.push(m);
+    tekenAlles();
+    return n;
+  }
+  function zetBijGroep(n){
+    bijGroep = (bijGroep === n) ? null : n;
+    if(badge){
+      badge.className = bijGroep ? 'aan' : '';
+      badge.textContent = bijGroep ? '+ plek bij punt ' + bijGroep + '  ✕' : '';
+      badge.style.background = bijGroep ? kleur(bijGroep) : '#fff';
+      badge.style.color = '#fff';
+    }
+  }
+
+  /* ---------- aanraken ---------- */
+  var start = null, drukTimer = null, sleepMark = null, verschoven = false, laatst = null;
+
+  function afstandPunt(m, p){ return Math.hypot(m.x - p.x, m.y - p.y); }
+  function afstandLijn(m, p){
+    var vx = m.x2 - m.x, vy = m.y2 - m.y, len = vx * vx + vy * vy;
+    var t = len ? Math.max(0, Math.min(1, ((p.x - m.x) * vx + (p.y - m.y) * vy) / len)) : 0;
+    return Math.hypot(m.x + t * vx - p.x, m.y + t * vy - p.y);
+  }
+  function markOnder(p){
+    for(var i = marks.length - 1; i >= 0; i--){
+      var m = marks[i];
+      if(m.pag !== pagina) continue;
+      if(m.soort === 'punt' && afstandPunt(m, p) <= 26) return m;
+      if((m.soort === 'pijl' || m.soort === 'dubbel') && afstandLijn(m, p) <= 18) return m;
+      if(m.soort === 'cirkel' && (m.p || []).some(function(q){ return Math.hypot(q.x - p.x, q.y - p.y) <= 22; })) return m;
+    }
+    return null;
+  }
+  function verschuif(m, dx, dy){
+    m.x += dx; m.y += dy;
+    if(m.x2 != null){ m.x2 += dx; m.y2 += dy; }
+    if(m.p) m.p.forEach(function(q){ q.x += dx; q.y += dy; });
+  }
+
+  function omlaag(e){
+    if(!aan) return;
+    e.preventDefault();
+    var p = naarInhoud(e.clientX, e.clientY);
+    start = {c:{x: e.clientX, y: e.clientY}, p: p};
+    laatst = p; verschoven = false; sleepMark = null;
+    var onder = markOnder(p);
+    if(onder){
+      /* lang indrukken = verplaatsen; beweeg je eerder, dan teken je gewoon */
+      drukTimer = setTimeout(function(){
+        drukTimer = null; sleepMark = onder;
+        if(navigator.vibrate) try{ navigator.vibrate(12); }catch(_){}
+      }, 380);
+    }
+    if(gereed === 'cirkel'){
+      bezig = {soort:'cirkel', pag: pagina, x: p.x, y: p.y, p: [{x: p.x, y: p.y}], grp: bijGroep || volgendNr()};
+    } else if(gereed !== 'punt'){
+      bezig = {soort: gereed, pag: pagina, x: p.x, y: p.y, x2: p.x, y2: p.y, grp: bijGroep || volgendNr()};
+    }
+    vel.setPointerCapture && vel.setPointerCapture(e.pointerId);
+    tekenAlles();
+  }
+  function beweeg(e){
+    if(!aan || !start) return;
+    e.preventDefault();
+    var p = naarInhoud(e.clientX, e.clientY);
+    var weg = Math.hypot(e.clientX - start.c.x, e.clientY - start.c.y);
+    if(drukTimer && weg > 8){ clearTimeout(drukTimer); drukTimer = null; }
+    if(sleepMark){
+      verschoven = true;
+      verschuif(sleepMark, p.x - laatst.x, p.y - laatst.y);
+      laatst = p; bezig = null; tekenAlles(); return;
+    }
+    laatst = p;
+    if(bezig){
+      if(bezig.soort === 'cirkel'){
+        var l = bezig.p[bezig.p.length - 1];
+        if(Math.hypot(p.x - l.x, p.y - l.y) > 6) bezig.p.push({x: p.x, y: p.y});
+      } else { bezig.x2 = p.x; bezig.y2 = p.y; }
+      tekenAlles();
+    }
+  }
+  function omhoog(e){
+    if(!aan || !start) return;
+    e.preventDefault();
+    if(drukTimer){ clearTimeout(drukTimer); drukTimer = null; }
+    var p = naarInhoud(e.clientX, e.clientY);
+    var weg = Math.hypot(e.clientX - start.c.x, e.clientY - start.c.y);
+    if(sleepMark){
+      sleepMark = null; start = null; bezig = null;
+      if(verschoven) tekenAlles();
+      return;
+    }
+    if(gereed === 'punt' || (bezig && weg < 12 && bezig.soort !== 'cirkel')){
+      bezig = null;
+      voegToe({soort:'punt', pag: pagina, x: p.x, y: p.y, anker: ankerOp(start.c.x, start.c.y)});
+    } else if(bezig){
+      var m = bezig; bezig = null;
+      /* de groep van het bezige element weggooien: voegToe beslist */
+      delete m.grp;
+      if(m.soort === 'cirkel'){
+        if(m.p.length < 3){ start = null; tekenAlles(); return; }
+        m.anker = ankerOp(start.c.x, start.c.y);
+      } else {
+        m.anker = ankerOp(start.c.x, start.c.y);
+        m.anker2 = ankerOp(e.clientX, e.clientY);
+      }
+      voegToe(m);
+    }
+    start = null;
+    tekenAlles();
+  }
+
+  /* ---------- de opdracht ---------- */
+  function plekTekst(m){
+    if(m.soort === 'punt')   return 'bij «' + m.anker + '»';
+    if(m.soort === 'pijl')   return 'van «' + m.anker + '» naar «' + m.anker2 + '»';
+    if(m.soort === 'dubbel') return 'verbindt «' + m.anker + '» ↔ «' + m.anker2 + '»';
+    return 'omcirkeld bij «' + m.anker + '»';
+  }
+  function appNaam(){
+    return (document.title || 'deze app').split(/[—–|]/)[0].replace(/\s*-\s*.*$/, '').trim() || 'deze app';
+  }
+  function maakOpdracht(){
+    if(!opdr.length) return '';
+    var regels = [];
+    regels.push('Opdracht voor ' + appNaam() + ' — ' + opdr.length + (opdr.length === 1 ? ' punt' : ' punten'));
+    var paginas = [];
+    var puntPag = {};
+    opdr.forEach(function(o){
+      var mijn = marks.filter(function(m){ return m.grp === o.n; });
+      var pag = mijn.length ? mijn[0].pag : '(geen plek)';
+      puntPag[o.n] = pag;
+      if(paginas.indexOf(pag) < 0) paginas.push(pag);
+    });
+    /* een foto van een pagina zonder punten krijgt toch zijn eigen kopje */
+    fotos.forEach(function(f){ if(paginas.indexOf(f.pag) < 0) paginas.push(f.pag); });
+    paginas.forEach(function(pag){
+      regels.push('');
+      regels.push('── ' + pag + ' ──');
+      opdr.filter(function(o){ return puntPag[o.n] === pag; })
+          .sort(function(a, b){ return a.n - b.n; })
+          .forEach(function(o){
+        var mijn = marks.filter(function(m){ return m.grp === o.n; });
+        mijn.forEach(function(m, i){
+          var extra = (i > 0 && m.pag !== pag) ? '  [op ' + m.pag + ']' : '';
+          regels.push(i === 0 ? o.n + '. ' + plekTekst(m) + extra
+                              : '   + ' + plekTekst(m) + extra);
+        });
+        var t = (o.tekst || '').trim();
+        (t ? t.split('\n') : ['(nog geen uitleg)']).forEach(function(r){ regels.push('   ' + r); });
+      });
+      fotos.filter(function(f){ return f.pag === pag; }).forEach(function(f){
+        var p = f.punten;
+        regels.push('📷 foto ' + f.n + ' — ' + (!p.length ? 'geen punten in beeld'
+          : (p.length === 1 ? 'punt ' + p[0] + ' staat erop'
+                            : 'punten ' + p.slice(0, -1).join(', ') + ' en ' + p[p.length - 1] + ' staan erop')));
+      });
+    });
+    return regels.join('\n');
+  }
+
+  /* ---------- foto van de hele pagina ---------- */
+  function alleCss(){
+    var uit = '';
+    for(var i = 0; i < document.styleSheets.length; i++){
+      try{
+        var rs = document.styleSheets[i].cssRules;
+        for(var j = 0; j < rs.length; j++) uit += rs[j].cssText + '\n';
+      }catch(_){}
+    }
+    return uit;
+  }
+  function neemWaardenOver(bron, doel){
+    var a = bron.querySelectorAll('input,textarea,select');
+    var b = doel.querySelectorAll('input,textarea,select');
+    for(var i = 0; i < a.length && i < b.length; i++){
+      var s = a[i], d = b[i];
+      if(s.tagName === 'SELECT'){
+        for(var j = 0; j < d.options.length; j++){
+          if(j === s.selectedIndex) d.options[j].setAttribute('selected', 'selected');
+          else d.options[j].removeAttribute('selected');
+        }
+      } else if(s.type === 'checkbox' || s.type === 'radio'){
+        if(s.checked) d.setAttribute('checked', 'checked'); else d.removeAttribute('checked');
+      } else {
+        /* een gekloond veld draagt zijn waarde in een property, niet in een attribuut */
+        d.setAttribute('value', s.value);
+        if(d.tagName === 'TEXTAREA') d.textContent = s.value;
+      }
+    }
+  }
+  function maakFoto(){
+    var rr = root.getBoundingClientRect(), sr = sc.getBoundingClientRect();
+    var extra = Math.max(0, sc.scrollHeight - sc.clientHeight);
+    var W = Math.round(rr.width), H = Math.round(rr.height + extra);
+    var alles = [].slice.call(root.querySelectorAll('*'));
+    var idx = alles.indexOf(sc);
+    var kloon = root.cloneNode(true);
+    [].slice.call(kloon.querySelectorAll('#annRoot')).forEach(function(n){ n.remove(); });
+    neemWaardenOver(root, kloon);
+    var kAlles = [].slice.call(kloon.querySelectorAll('*'));
+    var kSc = idx >= 0 ? kAlles[idx] : null;
+    if(kSc){ kSc.style.height = sc.scrollHeight + 'px'; kSc.style.maxHeight = 'none';
+             kSc.style.overflow = 'visible'; kSc.style.flex = 'none'; }
+    kloon.style.width = W + 'px'; kloon.style.height = H + 'px';
+    kloon.style.maxWidth = 'none'; kloon.style.margin = '0'; kloon.style.boxShadow = 'none';
+    /* filters en verlopen die de app buiten het kader bewaart, meenemen */
+    var defs = '';
+    [].slice.call(document.querySelectorAll('svg')).forEach(function(s){
+      if(root.contains(s)) return;
+      if(s.querySelector('filter,linearGradient,radialGradient,symbol,clipPath')) defs += new XMLSerializer().serializeToString(s);
+    });
+    var marksSvg = '';
+    marks.forEach(function(m){ if(m.pag === pagina) marksSvg += tekenMark(m); });
+    var dx = sr.left - rr.left, dy = sr.top - rr.top;
+    /* XMLSerializer, niet outerHTML: HTML is geen geldige XML en laadt dan stil niet */
+    var body = new XMLSerializer().serializeToString(kloon);
+    var svgTxt = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">' +
+      '<foreignObject x="0" y="0" width="' + W + '" height="' + H + '">' +
+      '<div xmlns="http://www.w3.org/1999/xhtml" style="width:' + W + 'px;height:' + H + 'px;overflow:hidden">' +
+      '<style><![CDATA[' + alleCss() + ']]></style>' + defs + body + '</div></foreignObject>' +
+      '<g transform="translate(' + dx + ',' + dy + ')">' + marksSvg + '</g></svg>';
+
+    return new Promise(function(res, rej){
+      var img = new Image();
+      img.onload = function(){
+        try{
+          var s = Math.min(2, 2600 / Math.max(W, H) * 2);
+          if(!(s > .5)) s = 1;
+          var cv = document.createElement('canvas');
+          cv.width = Math.round(W * s); cv.height = Math.round(H * s);
+          var ctx = cv.getContext('2d');
+          ctx.scale(s, s);
+          ctx.fillStyle = getComputedStyle(root).backgroundColor || '#fff';
+          ctx.fillRect(0, 0, W, H);
+          ctx.drawImage(img, 0, 0, W, H);
+          res(cv.toDataURL('image/png'));
+        }catch(e){ rej(e); }
+      };
+      img.onerror = function(){ rej(new Error('de foto kon niet worden opgebouwd')); };
+      /* data:-URL, geen blob:-URL — die besmet het canvas en breekt toDataURL */
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgTxt);
+    });
+  }
+  function fotoKnop(){
+    var op = [];
+    marks.forEach(function(m){ if(m.pag === pagina && op.indexOf(m.grp) < 0) op.push(m.grp); });
+    op.sort(function(a, b){ return a - b; });
+    maakFoto().then(function(png){
+      fotos.push({n: fotos.length + 1, png: png, punten: op, pag: pagina});
+      vulPaneel();
+      melding('📷 foto ' + fotos.length + ' bewaard — staat in het overzicht');
+    }).catch(function(e){ melding('Foto mislukt: ' + e.message); });
+  }
+  function melding(t){
+    var d = el('div', null, t);
+    d.style.cssText = 'position:fixed;left:50%;bottom:78px;transform:translateX(-50%);z-index:9004;' +
+      'background:#1c1c1e;color:#fff;padding:10px 15px;border-radius:12px;font-size:14px;max-width:88%;' +
+      'text-align:center;pointer-events:none;';
+    laag.appendChild(d);
+    setTimeout(function(){ d.remove(); }, 2600);
+  }
+
+  /* ---------- overzicht ---------- */
+  function vulPaneel(){
+    var body = paneel.querySelector('#annBody');
+    body.innerHTML = '';
+    if(fotos.length){
+      var rij = el('div'); rij.id = 'annFotos';
+      fotos.forEach(function(f){
+        var i = new Image(); i.src = f.png; i.alt = 'foto ' + f.n;
+        i.onclick = function(){ toonFoto(f); };
+        rij.appendChild(i);
+      });
+      body.appendChild(rij);
+    }
+    if(!opdr.length){
+      var leeg = el('div', null, 'Nog niets aangewezen. Zet de knop rechtsonder aan, tik op wat er anders moet en typ er hier bij wat je bedoelt.');
+      leeg.id = 'annLeeg';
+      body.appendChild(leeg);
+      return;
+    }
+    opdr.slice().sort(function(a, b){ return a.n - b.n; }).forEach(function(o){
+      var mijn = marks.filter(function(m){ return m.grp === o.n; });
+      var kaart = el('div', 'annPunt');
+      var kop = el('div', 'annPuntKop');
+      var bol = el('div', 'annBol', String(o.n));
+      bol.style.background = kleur(o.n);
+      kop.appendChild(bol);
+      kop.appendChild(el('div', null, mijn.length + (mijn.length === 1 ? ' plek' : ' plekken')));
+      kaart.appendChild(kop);
+      mijn.forEach(function(m, i){
+        var r = el('div', 'annPlek');
+        r.innerHTML = (i ? '+ ' : '') + plekTekst(m).replace(/</g, '&lt;') +
+          ' <span class="pag">[' + m.pag.replace(/</g, '&lt;') + ']</span>';
+        kaart.appendChild(r);
+      });
+      var ta = el('textarea');
+      ta.value = o.tekst;
+      ta.placeholder = 'Wat moet hier anders?';
+      ta.addEventListener('input', function(){ o.tekst = ta.value; });
+      kaart.appendChild(ta);
+      var voet = el('div', 'annPuntVoet');
+      var plus = el('button', null, bijGroep === o.n ? 'plek toevoegen staat aan' : '+ nog een plek');
+      plus.addEventListener('click', function(){
+        zetBijGroep(o.n);
+        sluitPaneel();
+        melding(bijGroep ? 'Teken de volgende plek — die hoort bij punt ' + o.n : 'Losse punten weer aan');
+      });
+      var weg = el('button', 'weg', 'verwijderen');
+      weg.addEventListener('click', function(){
+        marks = marks.filter(function(m){ return m.grp !== o.n; });
+        opdr = opdr.filter(function(x){ return x.n !== o.n; });
+        if(bijGroep === o.n) zetBijGroep(o.n);
+        tekenAlles(); vulPaneel();
+      });
+      voet.appendChild(plus); voet.appendChild(weg);
+      kaart.appendChild(voet);
+      body.appendChild(kaart);
+    });
+  }
+  function toonUitkomst(){
+    var body = paneel.querySelector('#annBody');
+    body.innerHTML = '';
+    var ta = el('textarea');
+    ta.id = 'annUitkomst';
+    ta.value = maakOpdracht() || 'Nog niets aangewezen.';
+    ta.readOnly = false;
+    body.appendChild(ta);
+    var hulp = el('div', null, 'Kopieer deze tekst en plak hem terug in het gesprek. Foto’s stuur je apart mee.');
+    hulp.style.cssText = 'font-size:13px;color:#6a6a70;margin-top:10px;line-height:1.45;';
+    body.appendChild(hulp);
+    var voet = paneel.querySelector('#annVoet');
+    voet.innerHTML = '';
+    var kop = el('button', null, 'kopieer');
+    kop.addEventListener('click', function(){
+      ta.select();
+      var ok = false;
+      try{ ok = document.execCommand('copy'); }catch(_){}
+      if(navigator.clipboard) navigator.clipboard.writeText(ta.value).then(function(){}, function(){});
+      melding(ok ? 'Gekopieerd' : 'Selecteer en kopieer met de hand');
+    });
+    var terug = el('button', 'tweede', 'terug');
+    terug.addEventListener('click', function(){ vulPaneel(); zetVoet(); });
+    voet.appendChild(terug); voet.appendChild(kop);
+  }
+  function zetVoet(){
+    var voet = paneel.querySelector('#annVoet');
+    voet.innerHTML = '';
+    var f = el('button', 'tweede', '📷 foto');
+    f.addEventListener('click', function(){ sluitPaneel(); setTimeout(fotoKnop, 60); });
+    var m = el('button', null, 'maak de opdracht');
+    m.addEventListener('click', toonUitkomst);
+    voet.appendChild(f); voet.appendChild(m);
+  }
+  function openPaneel(){ vulPaneel(); zetVoet(); paneel.classList.add('aan'); }
+  function sluitPaneel(){ paneel.classList.remove('aan'); }
+  function toonFoto(f){
+    fotoLaag.innerHTML = '';
+    var vak = el('div'); vak.id = 'annFotoVak';
+    var i = new Image(); i.src = f.png;
+    var tip = el('div', 'tip', 'Houd de foto ingedrukt om hem in je fotorol te bewaren; daarna kun je hem in de chat meesturen.');
+    var rij = el('div', 'rij');
+    var dicht = el('button', null, 'sluiten');
+    dicht.addEventListener('click', function(){ fotoLaag.classList.remove('aan'); });
+    var weg = el('button', null, 'verwijderen');
+    weg.addEventListener('click', function(){
+      fotos = fotos.filter(function(x){ return x !== f; });
+      fotos.forEach(function(x, ix){ x.n = ix + 1; });
+      fotoLaag.classList.remove('aan'); vulPaneel();
+    });
+    rij.appendChild(weg); rij.appendChild(dicht);
+    vak.appendChild(i); vak.appendChild(tip); vak.appendChild(rij);
+    fotoLaag.appendChild(vak);
+    fotoLaag.classList.add('aan');
+  }
+
+  /* ---------- opbouw ---------- */
+  function bouw(){
+    root = document.querySelector('.phone') || document.body;
+    if(getComputedStyle(root).position === 'static') root.style.position = 'relative';
+    sc = zoekScroll();
+
+    laag = el('div'); laag.id = 'annRoot';
+    svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.id = 'annSvg';
+    g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    svg.appendChild(g);
+    vel = el('div'); vel.id = 'annVel';
+    laag.appendChild(svg); laag.appendChild(vel);
+
+    var bar = el('div'); bar.id = 'annBar';
+    var tools = el('div'); tools.id = 'annTools';
+    Object.keys(SOORTEN).forEach(function(k){
+      var b = el('button', k === gereed ? 'on' : null,
+        k === 'punt' ? '✛' : k === 'pijl' ? '↗' : k === 'dubbel' ? '↔' : '◯');
+      b.title = SOORTEN[k];
+      b.setAttribute('data-ann-tool', k);
+      b.addEventListener('click', function(){ kies(k); });
+      tools.appendChild(b);
+    });
+    var cam = el('button', null, '📷');
+    cam.title = 'foto van deze pagina';
+    cam.addEventListener('click', fotoKnop);
+    tools.appendChild(cam);
+    badge = el('div'); badge.id = 'annGroepBadge';
+    badge.addEventListener('click', function(){ if(bijGroep) zetBijGroep(bijGroep); });
+    var knop = el('button', null, '✏️'); knop.id = 'annKnop';
+    knop.title = 'aanwijzen aan/uit';
+    knop.addEventListener('click', function(){ zetAan(!aan); });
+    bar.appendChild(badge); bar.appendChild(tools); bar.appendChild(knop);
+
+    lijstKnop = el('button', null, '📝 0 punten'); lijstKnop.id = 'annLijstKnop';
+    lijstKnop.addEventListener('click', openPaneel);
+
+    paneel = el('div'); paneel.id = 'annPaneel';
+    var vak = el('div'); vak.id = 'annVak';
+    var kop = el('div'); kop.id = 'annKop';
+    kop.appendChild(el('span', null, 'Wat moet er anders?'));
+    var dicht = el('button', null, 'sluiten');
+    dicht.addEventListener('click', sluitPaneel);
+    kop.appendChild(dicht);
+    var body = el('div'); body.id = 'annBody';
+    var voet = el('div'); voet.id = 'annVoet';
+    vak.appendChild(kop); vak.appendChild(body); vak.appendChild(voet);
+    paneel.appendChild(vak);
+    paneel.addEventListener('click', function(e){ if(e.target === paneel) sluitPaneel(); });
+
+    fotoLaag = el('div'); fotoLaag.id = 'annFoto';
+
+    laag.appendChild(bar); laag.appendChild(lijstKnop);
+    laag.appendChild(paneel); laag.appendChild(fotoLaag);
+    root.appendChild(laag);
+
+    vel.addEventListener('pointerdown', omlaag);
+    vel.addEventListener('pointermove', beweeg);
+    vel.addEventListener('pointerup', omhoog);
+    vel.addEventListener('pointercancel', omhoog);
+
+    /* scroll-events bubbelen niet: luister in de capture-fase */
+    root.addEventListener('scroll', zetShift, {capture: true});
+    window.addEventListener('resize', function(){ sc = zoekScroll(); tekenAlles(); });
+
+    pagina = paginaNu();
+    zetMarge();
+    setInterval(function(){
+      var n = paginaNu();
+      var s = zoekScroll();
+      if(s !== sc){ sc = s; zetShift(); }
+      if(n !== pagina){ pagina = n; tekenAlles(); }
+      zetMarge();
+    }, 220);
+    tekenAlles();
+  }
+  function kies(k){
+    gereed = k;
+    var bs = laag.querySelectorAll('[data-ann-tool]');
+    for(var i = 0; i < bs.length; i++) bs[i].className = bs[i].getAttribute('data-ann-tool') === k ? 'on' : '';
+  }
+  function zetAan(v){
+    aan = !!v;
+    laag.classList.toggle('aan', aan);
+    if(!aan){ sluitPaneel(); }
+    tekenAlles();
+  }
+
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bouw);
+  else bouw();
+
+  /* haakje om te kunnen testen zonder op de balk te klikken */
+  window.__ann = {
+    marks: function(){ return marks; },
+    opdr: function(){ return opdr; },
+    fotos: function(){ return fotos; },
+    kies: kies,
+    aan: zetAan,
+    pagina: function(){ return pagina; },
+    plek: function(n){ bijGroep = null; zetBijGroep(n); },
+    tekst: maakOpdracht,
+    foto: maakFoto,        /* alleen de PNG, niet bewaard */
+    neemFoto: fotoKnop,    /* zoals de knop: bewaren in het overzicht */
+    scroller: function(){ return sc; }
+  };
+})();
+</script>
