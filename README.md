@@ -49,10 +49,23 @@ het apparaat (IndexedDB).
 
 ## AI-functies
 
-De AI-suggesties (**Wat zullen we koken?**) en de voorraad-foto gebruiken de
-Anthropic API en vragen om je eigen API-sleutel. Zonder sleutel werkt de rest
-van de app gewoon: recepten bijhouden, koken met timers, boodschappenlijst,
-weekplanner en gezinsleden.
+De AI-onderdelen (**Wat zullen we koken?**, recept inladen, vragen tijdens het
+koken, de voorraad-foto en het uitzoeken per gezinslid) vragen om je eigen
+API-sleutel. Zonder sleutel werkt de rest van de app gewoon: recepten bijhouden,
+koken met timers, boodschappenlijst, weekplanner en gezinsleden.
+
+Je kiest zelf de dienst onder **Jij → AI-dienst**:
+
+| dienst | endpoint | standaardmodel |
+|---|---|---|
+| Claude (Anthropic) | `POST /v1/messages` | `claude-sonnet-4-6` |
+| OpenAI | `POST /v1/responses` | `gpt-5-mini` |
+
+Elke dienst heeft zijn eigen sleutel (apart in `localStorage`) en zijn eigen
+modelnaam, dus wisselen kan zonder iets kwijt te raken. Het model is een gewoon
+tekstveld: kent de dienst de naam niet, dan zie je die melding terug en vul je
+een andere in. Het zoeken naar bestaande recepten gebruikt bij Claude de
+`web_search`-tool en bij OpenAI de ingebouwde `web_search` van de Responses API.
 
 ### AI-gebruik en budget
 
@@ -60,7 +73,8 @@ Onder **Jij → AI-gebruik** staat wat de AI deze maand ongeveer heeft gekost, i
 dollars: het bedrag, hoeveel er nog over is van je maandbedrag, het aantal
 aanvragen, de tokens en het aantal zoekacties, plus de vorige maanden. Het is een
 schatting op basis van de tokens die de API per antwoord teruggeeft, tegen de
-prijzen van Sonnet (`PRIJS` in de code) — je echte tegoed staat bij Anthropic.
+prijzen in `PRIJZEN` in de code (per model, voor beide diensten) — je echte
+tegoed staat bij de dienst zelf.
 Je krijgt één melding als er nog 20% van je maandbedrag over is en één bij 10%;
 elke nieuwe maand begint opnieuw.
 

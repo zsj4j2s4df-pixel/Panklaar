@@ -337,28 +337,60 @@ async function saveData(d){
 /* AI-sleutel — alleen op dit apparaat (localStorage) */
 const AI_MODEL = 'claude-sonnet-4-6';
 let lastAiError = '';
-function aiKey(){ try{ return (localStorage.getItem('panklaar_ai_key')||'').trim(); }catch(e){ return ''; } }
-function saveAiKey(v){ try{ localStorage.setItem('panklaar_ai_key', String(v||'').trim()); return true; }catch(e){ return false; } }
+
+/* Twee diensten om uit te kiezen. Ze doen hetzelfde werk; alleen de vorm van
+   de aanvraag en het antwoord verschilt, en dat vertalen we hieronder. */
+const DIENSTEN = {
+  anthropic: {
+    label:'Claude', merk:'Anthropic', sleutelNaam:'panklaar_ai_key', begint:'sk-ant-api…',
+    model:'claude-sonnet-4-6', console:'console.anthropic.com'
+  },
+  openai: {
+    label:'OpenAI', merk:'OpenAI', sleutelNaam:'panklaar_openai_key', begint:'sk-…',
+    model:'gpt-5-mini', console:'platform.openai.com'
+  }
+};
+function dienstId(){ return DIENSTEN[S && S.aiDienst] ? S.aiDienst : 'anthropic'; }
+function dienst(){ return DIENSTEN[dienstId()]; }
+function aiModel(){
+  const eigen = (S && S.aiModellen && S.aiModellen[dienstId()] || '').trim();
+  return eigen || dienst().model;
+}
+function aiKey(){ try{ return (localStorage.getItem(dienst().sleutelNaam)||'').trim(); }catch(e){ return ''; } }
+function saveAiKey(v){ try{ localStorage.setItem(dienst().sleutelNaam, String(v||'').trim()); return true; }catch(e){ return false; } }
 /* kan deze browser überhaupt opslaan? (privémodus blokkeert dit soms) */
 function storageOk(){ try{ localStorage.setItem('__pk_t','1'); localStorage.removeItem('__pk_t'); return true; }catch(e){ return false; } }
 function maskKey(k){ return k.length < 14 ? '•'.repeat(k.length) : `${k.slice(0,8)}…${k.slice(-4)}`; }
 function aiHeaders(){
   const h = {'Content-Type':'application/json'};
   const k = aiKey();
-  if(k){ h['x-api-key'] = k; h['anthropic-version'] = '2023-06-01'; h['anthropic-dangerous-direct-browser-access'] = 'true'; }
+  if(!k) return h;
+  if(dienstId() === 'openai'){ h['Authorization'] = 'Bearer ' + k; }
+  else { h['x-api-key'] = k; h['anthropic-version'] = '2023-06-01'; h['anthropic-dangerous-direct-browser-access'] = 'true'; }
   return h;
 }
 
 /* Wat een aanvraag ongeveer kost. Anthropic rekent per miljoen tokens; het
    zoeken op internet gaat per duizend zoekopdrachten. Prijzen van Sonnet —
    staat de prijs of het model anders, pas ze hier aan. */
-const PRIJS = {
-  invoer:      3.00 / 1e6,
-  uitvoer:    15.00 / 1e6,
-  cacheSchrijf: 3.75 / 1e6,
-  cacheLees:    0.30 / 1e6,
-  zoeken:     10.00 / 1000
+const PRIJZEN = {
+  'claude-sonnet': {invoer:3.00, uitvoer:15.00, cacheSchrijf:3.75, cacheLees:0.30, zoeken:10.00},
+  'claude-haiku':  {invoer:1.00, uitvoer:5.00,  cacheSchrijf:1.25, cacheLees:0.10, zoeken:10.00},
+  'claude-opus':   {invoer:15.00, uitvoer:75.00, cacheSchrijf:18.75, cacheLees:1.50, zoeken:10.00},
+  'gpt-5-nano':    {invoer:0.05, uitvoer:0.40, cacheSchrijf:0, cacheLees:0.005, zoeken:10.00},
+  'gpt-5-mini':    {invoer:0.25, uitvoer:2.00, cacheSchrijf:0, cacheLees:0.025, zoeken:10.00},
+  'gpt-5':         {invoer:1.25, uitvoer:10.00, cacheSchrijf:0, cacheLees:0.125, zoeken:10.00},
+  'gpt-4o-mini':   {invoer:0.15, uitvoer:0.60, cacheSchrijf:0, cacheLees:0.075, zoeken:10.00},
+  'gpt-4o':        {invoer:2.50, uitvoer:10.00, cacheSchrijf:0, cacheLees:1.25, zoeken:10.00}
 };
+/* de langste naam die op het model past wint, zodat gpt-5-mini niet als gpt-5 telt */
+function prijsVan(model){
+  const m = String(model||'').toLowerCase();
+  let beste = null, lang = -1;
+  Object.keys(PRIJZEN).forEach(k=>{ if(m.indexOf(k) >= 0 && k.length > lang){ beste = PRIJZEN[k]; lang = k.length; } });
+  return beste || PRIJZEN['claude-sonnet'];
+}
+const PRIJS_NOOT = 'Prijzen per miljoen tokens, zoeken per duizend acties. Ze staan in de code onder PRIJZEN — klopt er iets niet meer, dan pas je ze daar aan.';
 const maandNu = () => new Date().toISOString().slice(0,7);
 const MAAND_NL = ['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
 function maandLabel(k){
@@ -372,15 +404,20 @@ function maandVak(k){
   if(!S.usage[k].gewaarschuwd) S.usage[k].gewaarschuwd = [];
   return S.usage[k];
 }
-/* wat één antwoord kostte, bij de maand optellen */
-function boekGebruik(u){
+/* wat één antwoord kostte, bij de maand optellen — beide diensten geven
+   tokens terug, alleen onder net iets andere namen */
+function boekGebruik(u, zoekActies){
   if(!u) return;
   const m = maandVak(maandNu());
-  const inv = +u.input_tokens || 0, uit = +u.output_tokens || 0;
-  const cw = +u.cache_creation_input_tokens || 0, cr = +u.cache_read_input_tokens || 0;
-  const zk = (u.server_tool_use && +u.server_tool_use.web_search_requests) || 0;
+  const P = prijsVan(aiModel());
+  const cr = +u.cache_read_input_tokens || (u.input_tokens_details && +u.input_tokens_details.cached_tokens) || 0;
+  const cw = +u.cache_creation_input_tokens || 0;
+  /* bij Anthropic staan de gecachte tokens naast input_tokens, bij OpenAI erin */
+  const inv = Math.max(0, (+u.input_tokens || 0) - (u.input_tokens_details ? cr : 0));
+  const uit = +u.output_tokens || 0;
+  const zk = (u.server_tool_use && +u.server_tool_use.web_search_requests) || +zoekActies || 0;
   m.calls += 1; m.in += inv; m.out += uit; m.cw += cw; m.cr += cr; m.zoek += zk;
-  m.kosten += inv*PRIJS.invoer + uit*PRIJS.uitvoer + cw*PRIJS.cacheSchrijf + cr*PRIJS.cacheLees + zk*PRIJS.zoeken;
+  m.kosten += (inv*P.invoer + uit*P.uitvoer + cw*P.cacheSchrijf + cr*P.cacheLees) / 1e6 + zk*P.zoeken/1000;
 }
 function dollar(n){
   if(!n) return '$0,00';
@@ -391,15 +428,69 @@ function getal(n){ return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g,
 
 /* Eén plek voor alle AI-aanroepen, zodat een echte foutmelding zichtbaar wordt
    in plaats van een algemeen "niet gelukt". */
+/* de tekst en een eventuele foto uit onze eigen aanvraagvorm halen */
+function pakInhoud(body){
+  const c = (body.messages && body.messages[0] && body.messages[0].content) || '';
+  if(typeof c === 'string') return {tekst:c, foto:null};
+  let tekst = '', foto = null;
+  c.forEach(b=>{
+    if(b.type === 'text') tekst += b.text;
+    if(b.type === 'image' && b.source) foto = b.source;
+  });
+  return {tekst, foto};
+}
+
+/* OpenAI: één aanvraag, het zoeken regelt hun kant zelf */
+async function openaiRequest(body){
+  const {tekst, foto} = pakInhoud(body);
+  const inhoud = [{type:'input_text', text:tekst}];
+  if(foto) inhoud.unshift({type:'input_image', image_url:`data:${foto.media_type};base64,${foto.data}`});
+  const req = {
+    model: aiModel(),
+    input: [{role:'user', content:inhoud}],
+    max_output_tokens: Math.max(256, +body.max_tokens || 1000)
+  };
+  if(body.tools && body.tools.length) req.tools = [{type:'web_search'}];
+  let res;
+  try{
+    res = await fetch('https://api.openai.com/v1/responses', {method:'POST', headers:aiHeaders(), body:JSON.stringify(req)});
+  }catch(e){
+    throw new Error('Geen verbinding met OpenAI. Controleer je internet.');
+  }
+  let data;
+  try{ data = await res.json(); }
+  catch(e){ throw new Error(`Onverwacht antwoord van OpenAI (status ${res.status}).`); }
+  if(!res.ok || (data && data.error)){
+    throw new Error((data && data.error && data.error.message) || `status ${res.status}`);
+  }
+  const stukken = Array.isArray(data.output) ? data.output : [];
+  const zoek = stukken.filter(x=>x && x.type === 'web_search_call').length;
+  let out = '';
+  stukken.forEach(x=>{
+    (x && Array.isArray(x.content) ? x.content : []).forEach(c=>{
+      if(c && (c.type === 'output_text' || c.type === 'text') && c.text) out += c.text;
+    });
+  });
+  if(!out && typeof data.output_text === 'string') out = data.output_text;
+  boekGebruik(data.usage, zoek);
+  if(!out) throw new Error('Leeg antwoord van OpenAI.');
+  return out;
+}
+
 async function aiRequest(body){
-  if(!aiKey()) throw new Error('Geen AI-sleutel ingevuld. Ga naar Jij → AI-sleutel.');
+  if(!aiKey()) throw new Error(`Geen ${dienst().label}-sleutel ingevuld. Ga naar Jij → AI-sleutel.`);
+  if(dienstId() === 'openai'){
+    const t = await openaiRequest(body);
+    persist(); letOpBudget();
+    return t.replace(/```json|```/g,'').trim();
+  }
   let msgs = (body.messages||[]).slice(), out = '';
   /* zoeken gebeurt bij Anthropic zelf; die kan de beurt pauzeren, dus vervolgen we hem */
   for(let round = 0; round < 4; round++){
     let res;
     try{
       res = await fetch('https://api.anthropic.com/v1/messages', {
-        method:'POST', headers: aiHeaders(), body: JSON.stringify({...body, messages:msgs})
+        method:'POST', headers: aiHeaders(), body: JSON.stringify({...body, model:aiModel(), messages:msgs})
       });
     }catch(e){
       throw new Error('Geen verbinding met de AI-dienst. Controleer je internet.');
@@ -1227,12 +1318,13 @@ function viewProfile(){
     <div class="eyebrow"><span>AI-sleutel stap voor stap</span></div>
     <div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">
       Alleen nodig voor <span class="hand">Wat zullen we koken?</span> en de voorraad-foto. Zonder sleutel werkt de rest van de app gewoon.
+      Je kiest zelf of je <span class="hand">Claude</span> of <span class="hand">OpenAI</span> gebruikt; de stappen zijn bij allebei hetzelfde, alleen de website verschilt.
     </div>
     <div class="sketch card">
-      <div class="step"><span class="n hand">1</span><span class="tx">Ga naar <span class="hand">console.anthropic.com</span> en log in, of maak een account aan.</span></div>
+      <div class="step"><span class="n hand">1</span><span class="tx">Ga naar <span class="hand">${esc(dienst().console)}</span> en log in, of maak een account aan.</span></div>
       <div class="step"><span class="n hand">2</span><span class="tx">Zet tegoed op je account bij <span class="hand">Billing</span>. Let op: een Claude-abonnement (Pro of Max) telt hier niet voor mee — de API werkt met apart tegoed.</span></div>
       <div class="step"><span class="n hand">3</span><span class="tx">Open <span class="hand">API Keys</span> en klik op <span class="hand">Create Key</span>.</span></div>
-      <div class="step"><span class="n hand">4</span><span class="tx">Kopieer de sleutel — die begint met <span class="hand">sk-ant-api…</span> en is maar één keer te zien.</span></div>
+      <div class="step"><span class="n hand">4</span><span class="tx">Kopieer de sleutel — die begint met <span class="hand">${esc(dienst().begint)}</span> en is maar één keer te zien.</span></div>
       <div class="step"><span class="n hand">5</span><span class="tx">Plak hem hieronder bij <span class="hand">AI-sleutel</span> en tik op <span class="hand">Sleutel testen</span>.</span></div>
     </div>
     <div class="eyebrow"><span>Boodschappen via Siri</span></div>
@@ -1255,6 +1347,7 @@ function viewProfile(){
     <div class="sketch soft card" style="margin-bottom:20px">
       <div class="step"><span class="n">·</span><span class="tx">De sleutel blijft op dit apparaat en gaat nergens anders heen.</span></div>
       <div class="step"><span class="n">·</span><span class="tx">Elke website bewaart z'n eigen sleutel. Gebruik je Panklaar ook op een andere telefoon, plak hem daar dan opnieuw.</span></div>
+      <div class="step"><span class="n">·</span><span class="tx">Claude en OpenAI hebben elk hun eigen sleutel en hun eigen tegoed. Wisselen kan altijd; wat je invulde blijft staan.</span></div>
       <div class="step"><span class="n">·</span><span class="tx">De kosten zijn klein: grofweg een paar cent per keer dat je recepten laat bedenken.</span></div>
       <div class="step"><span class="n">·</span><span class="tx">De voedingsregels bij gezinsleden volgen het Voedingscentrum, maar dit is geen medisch advies — overleg bij twijfel met je verloskundige, huisarts of het consultatiebureau.</span></div>
     </div>` : ''}
@@ -1312,19 +1405,36 @@ function viewProfile(){
     <div class="chips" style="margin-bottom:20px">
       ${EQUIPMENT.map(e=>`<button class="chip ${(S.equip||[]).includes(e.id)?'on':''}" data-equip="${e.id}">${e.label}</button>`).join('')}
     </div>` : ''}
-    <div class="eyebrow"><span>AI-sleutel</span></div>
-    <div class="muted" style="font-size:14px;margin:0 4px 10px;line-height:1.4">Plak je Anthropic API-sleutel zodat 'Wat zullen we koken?' en de voorraad-foto werken. Blijft alleen op dit apparaat.</div>
+    <div class="eyebrow"><span>AI-dienst</span></div>
+    <div class="chips" style="margin-bottom:8px">
+      ${Object.keys(DIENSTEN).map(k=>`<button class="chip ${dienstId()===k?'on':''}" data-dienst="${k}">${DIENSTEN[k].label}</button>`).join('')}
+    </div>
+    <div class="muted" style="font-size:14px;margin:0 4px 16px;line-height:1.45">
+      Beide kunnen recepten bedenken, inladen, vragen beantwoorden en een foto van je voorraad lezen. Elke dienst heeft z'n eigen sleutel; je kunt dus wisselen zonder iets kwijt te raken.
+    </div>
+    <div class="eyebrow"><span>${esc(dienst().merk)}-sleutel</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 10px;line-height:1.4">Plak je ${esc(dienst().merk)} API-sleutel zodat 'Wat zullen we koken?' en de voorraad-foto werken. Blijft alleen op dit apparaat.</div>
     <div class="split" style="margin-bottom:10px">
-      <input class="inp" id="ai-key" type="password" placeholder="sk-ant-..." value="${esc(aiKey())}" style="flex:1">
+      <input class="inp" id="ai-key" type="password" placeholder="${esc(dienst().begint)}" value="${esc(aiKey())}" style="flex:1">
       <button class="btn fill" id="ai-save" aria-label="Sleutel opslaan">${ic('check','')}</button>
+    </div>
+    <div class="field" style="margin-bottom:10px">
+      <label for="ai-model">Model</label>
+      <div class="split">
+        <input class="inp" id="ai-model" value="${esc(aiModel())}" placeholder="${esc(dienst().model)}" style="flex:1">
+        <button class="btn fill" id="ai-model-save" aria-label="Model opslaan">${ic('check','')}</button>
+      </div>
+    </div>
+    <div class="muted" style="font-size:14px;margin:0 4px 10px;line-height:1.45">
+      Standaard <span class="hand">${esc(dienst().model)}</span>. Kent de dienst die naam niet, dan zie je dat in de melding hieronder en vul je een andere in.
     </div>
     <div class="sketch soft card" style="margin-bottom:10px">
       <div style="font-size:15px;line-height:1.45">
         ${!storageOk()
           ? 'Deze browser mag niets opslaan (privémodus?). De sleutel blijft daardoor niet bewaard.'
           : aiKey()
-            ? `Sleutel opgeslagen op dit apparaat: <span class="hand">${esc(maskKey(aiKey()))}</span>`
-            : 'Nog geen sleutel op dit apparaat. Let op: elke app bewaart de sleutel apart — die van je koffie-app telt hier niet mee.'}
+            ? `${esc(dienst().merk)}-sleutel opgeslagen op dit apparaat: <span class="hand">${esc(maskKey(aiKey()))}</span>`
+            : `Nog geen ${esc(dienst().merk)}-sleutel op dit apparaat. Let op: elke app bewaart de sleutel apart — die van je koffie-app telt hier niet mee.`}
       </div>
     </div>
     <button class="btn ghost wide" id="ai-test" style="margin-bottom:10px">${ic('spark','')} Sleutel testen</button>
@@ -1461,7 +1571,7 @@ function gebruikBlok(){
   return `
     <div class="eyebrow"><span>AI-gebruik</span></div>
     <div class="muted" style="font-size:14px;margin:0 4px 10px;line-height:1.4">
-      Geschat op basis van wat de AI per antwoord teruggeeft. Je echte tegoed staat bij Anthropic.
+      Geschat op basis van wat de AI per antwoord teruggeeft, voor <span class="hand">${esc(aiModel())}</span>. Je echte tegoed staat bij ${esc(dienst().merk)}.
     </div>
     <div class="sketch card">
       <div class="row" style="align-items:flex-end;margin-bottom:8px">
@@ -1497,6 +1607,7 @@ function gebruikBlok(){
       ${eerder.map(x=>`<div class="step"><span class="n">·</span><span class="tx">${esc(maandLabel(x))} — ${dollar(S.usage[x].kosten||0)} in ${S.usage[x].calls||0} ${(S.usage[x].calls||0)===1?'aanvraag':'aanvragen'}</span></div>`).join('')}
       <div class="step"><span class="n">·</span><span class="tx">Alles bij elkaar: <span class="hand">${dollar(totaal)}</span></span></div>
     </div>` : ''}
+    <div class="muted" style="font-size:13px;margin:0 4px 10px;line-height:1.45">${PRIJS_NOOT}</div>
     <button class="btn ghost wide" id="ai-usage-reset" style="margin-bottom:20px">${ic('trash','')} Tellerstand wissen</button>`;
 }
 
@@ -1652,7 +1763,7 @@ function toonBudgetMelding(grens, m, b){
     <button class="btn fill wide" id="warnGo" style="margin-top:4px">${ic('user','')} Naar AI-gebruik</button>
     <button class="btn ghost wide" id="warnOk" style="margin-top:10px">Begrepen</button>
     <div class="muted" style="font-size:13px;margin:12px 4px 0;line-height:1.45">
-      Dit is een schatting op basis van de tokens die de AI teruggeeft. Je echte tegoed staat bij Anthropic.
+      Dit is een schatting op basis van de tokens die de AI teruggeeft. Je echte tegoed staat bij de dienst zelf.
     </div>`;
   $('warn').classList.add('on');
 }
@@ -2320,7 +2431,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research],#ai-budget-save,#ai-usage-reset,#warnClose,#warnOk,#warnGo');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research],#ai-budget-save,#ai-usage-reset,#warnClose,#warnOk,#warnGo,[data-dienst],#ai-model-save');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
@@ -2453,6 +2564,19 @@ document.addEventListener('click', async (e)=>{
   }
   if(t.id === 'warnClose' || t.id === 'warnOk'){ $('warn').classList.remove('on'); return; }
   if(t.id === 'warnGo'){ $('warn').classList.remove('on'); go('profile'); return; }
+  if(t.dataset.dienst){
+    S.aiDienst = t.dataset.dienst;
+    lastAiError = '';
+    await persist(); render();
+    toast(`AI-dienst: ${DIENSTEN[S.aiDienst].label}`);
+    return;
+  }
+  if(t.id === 'ai-model-save'){
+    if(!S.aiModellen) S.aiModellen = {};
+    S.aiModellen[dienstId()] = ($('ai-model') ? $('ai-model').value : '').trim();
+    await persist(); render(); toast(`Model: ${aiModel()}`);
+    return;
+  }
   if(t.id === 'ai-budget-save'){
     const v = +($('ai-budget') ? $('ai-budget').value : 0);
     if(!(v > 0)){ toast('Vul een bedrag boven nul in'); return; }
@@ -2644,6 +2768,8 @@ document.addEventListener('input', e=>{
   if(!S.timers) S.timers = [];
   if(!S.usage) S.usage = {};
   if(!(+S.budget > 0)) S.budget = 5;
+  if(!DIENSTEN[S.aiDienst]) S.aiDienst = 'anthropic';
+  if(!S.aiModellen) S.aiModellen = {};
   /* ?add=honing,koekjes,zalm — zo kan een Siri-opdracht items aanleveren */
   try{
     const q = new URLSearchParams(location.search).get('add');
