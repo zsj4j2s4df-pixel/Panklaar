@@ -38,11 +38,12 @@ het apparaat (IndexedDB).
 - **Wat heb ik in huis**: voorraad aanvullen door een **foto** te maken of te typen.
 - **Wat zullen we koken?**: een korte pop-up (maaltijd, wie eet mee, voorkeuren)
   die met de AI 1–3 recepten voorstelt om uit te kiezen.
-- **Recept inladen**: open een receptbestand (`.json`, gaat buiten de AI om), of
-  plak een recept dat je ergens tegenkwam (de tekst of alleen de link) en laat
-  het omzetten naar de vorm van de app, eventueel met een wijziging als "met kip
-  in plaats van zalm". In de map [`recepten/`](recepten) staan kant-en-klare
-  bestanden om in te laden.
+- **Recept inladen** op drie manieren: een **foto** van een kookboek, tijdschrift,
+  kaartje of je eigen handschrift (meerdere foto's tegelijk voor een dubbele
+  pagina), **geplakte tekst of een link**, of een **receptbestand** (`.json`, gaat
+  buiten de AI om). Bij de eerste twee kun je meteen een wijziging meegeven, zoals
+  "met kip in plaats van zalm". In de map [`recepten/`](recepten) staan
+  kant-en-klare bestanden om in te laden.
 - **Boodschappenlijst** (gegroepeerd per gerecht, hoeveelheden worden bij elkaar
   opgeteld) en **weekplanner**.
 - Installeerbare **PWA**, werkt offline (behalve de AI-functies).

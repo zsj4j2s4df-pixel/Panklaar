@@ -431,20 +431,23 @@ function getal(n){ return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g,
 /* de tekst en een eventuele foto uit onze eigen aanvraagvorm halen */
 function pakInhoud(body){
   const c = (body.messages && body.messages[0] && body.messages[0].content) || '';
-  if(typeof c === 'string') return {tekst:c, foto:null};
-  let tekst = '', foto = null;
+  if(typeof c === 'string') return {tekst:c, fotos:[]};
+  let tekst = '';
+  const fotos = [];
   c.forEach(b=>{
     if(b.type === 'text') tekst += b.text;
-    if(b.type === 'image' && b.source) foto = b.source;
+    if(b.type === 'image' && b.source) fotos.push(b.source);
   });
-  return {tekst, foto};
+  return {tekst, fotos};
 }
 
 /* OpenAI: één aanvraag, het zoeken regelt hun kant zelf */
 async function openaiRequest(body){
-  const {tekst, foto} = pakInhoud(body);
+  const {tekst, fotos} = pakInhoud(body);
   const inhoud = [{type:'input_text', text:tekst}];
-  if(foto) inhoud.unshift({type:'input_image', image_url:`data:${foto.media_type};base64,${foto.data}`});
+  fotos.slice().reverse().forEach(f=>{
+    inhoud.unshift({type:'input_image', image_url:`data:${f.media_type};base64,${f.data}`});
+  });
   const req = {
     model: aiModel(),
     input: [{role:'user', content:inhoud}],
@@ -1840,13 +1843,20 @@ function viewImport(){
       <span class="h hand">Recept inladen</span>
       <span style="width:28px"></span>
     </div>
-    <p class="subtitle" style="margin-top:6px">Open een receptbestand, of plak een recept dat je ergens tegenkwam.</p>
-    <div class="eyebrow"><span>Uit een bestand</span></div>
-    <div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">
-      Een receptbestand (.json) inladen gaat buiten de AI om — je hebt er geen sleutel voor nodig.
+    <p class="subtitle" style="margin-top:6px">Maak een foto van een recept, plak er een, of open een receptbestand.</p>
+    <div class="field">
+      <label for="imp-tweak">Wil je er iets aan veranderen? (optioneel)</label>
+      <input class="inp" id="imp-tweak" value="${esc(impTweak)}" placeholder="met kip in plaats van zalm">
     </div>
-    <button class="btn wide" id="imp-file-btn" style="margin-bottom:6px">${ic('inbox','')} Bestand kiezen</button>
-    <input type="file" accept=".json,.txt,application/json,text/plain" id="imp-file" style="display:none">
+    <div class="muted" style="font-size:14px;margin:-6px 4px 16px;line-height:1.45">
+      Geldt voor een foto en voor geplakte tekst.
+    </div>
+    <div class="eyebrow"><span>Van een foto</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">
+      Een bladzijde uit een kookboek, een tijdschrift, een kaartje of je eigen handschrift. Staat het recept over twee pagina's? Kies er dan meerdere tegelijk (maximaal drie).
+    </div>
+    <button class="btn fill wide" id="imp-foto-btn" style="margin-bottom:6px">${ic('camera','')} Foto van een recept</button>
+    <input type="file" accept="image/*" multiple id="imp-foto" style="display:none">
     ${DIVIDER}
     <div class="eyebrow"><span>Of plak een recept</span></div>
     <div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">
@@ -1854,13 +1864,16 @@ function viewImport(){
     </div>
     <div class="field">
       <label for="imp-in">Recept of link</label>
-      <textarea class="inp" id="imp-in" rows="8" placeholder="https://…&#10;of plak hier de tekst van het recept">${esc(impText)}</textarea>
+      <textarea class="inp" id="imp-in" rows="7" placeholder="https://…&#10;of plak hier de tekst van het recept">${esc(impText)}</textarea>
     </div>
-    <div class="field">
-      <label for="imp-tweak">Wil je er iets aan veranderen? (optioneel)</label>
-      <input class="inp" id="imp-tweak" value="${esc(impTweak)}" placeholder="met kip in plaats van zalm">
+    <button class="btn wide" id="imp-go" style="margin-bottom:6px">${ic('spark','')} Inladen met AI</button>
+    ${DIVIDER}
+    <div class="eyebrow"><span>Uit een bestand</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">
+      Een receptbestand (.json) inladen gaat buiten de AI om — je hebt er geen sleutel voor nodig.
     </div>
-    <button class="btn fill wide" id="imp-go">${ic('spark','')} Inladen met AI</button>
+    <button class="btn wide" id="imp-file-btn">${ic('inbox','')} Bestand kiezen</button>
+    <input type="file" accept=".json,.txt,application/json,text/plain" id="imp-file" style="display:none">
     ${BOARD_KNIFE_DRAWING}
   `;
 }
@@ -1912,6 +1925,69 @@ function loadRecipeFile(f){
 }
 
 /* het recept ophalen of uit de geplakte tekst vissen, en omzetten */
+/* De opdracht om iets naar mijn receptvorm om te zetten — voor geplakte
+   tekst, een link en een foto is die op één regel na hetzelfde. */
+function importPrompt(bronRegel, staart){
+  const tweak = impTweak.trim();
+  const tweakNote = tweak ? ` Pas het recept aan volgens deze wens en verwerk dat overal — in de naam, de ingrediënten én de stappen: ${tweak}.` : '';
+  const tipsNote = aiOn('tips') ? ' Geef in "tips" twee tot vier suggesties voor extra ingrediënten of kruiden. Werk elke tip uit met "tekst", "ingredienten" (met hoeveelheid), "stap" en "na" (het stapnummer waarna die stap komt).' : '';
+  const uitlegNote = aiOn('uitleg') ? ' Leg in "uitleg" in twee tot vier zinnen uit hoe de belangrijkste techniek werkt en waarom je het zo doet.' : '';
+  const fam = familyPrompt();
+  const famNote = fam ? `${fam}
+Botst het originele recept met deze regels? Pas het dan aan zodat het wél kan — schrijf het veilige alternatief gewoon in de ingrediënten en de stappen — en zet in "letop" per aanpassing één zin: wat je veranderde en voor wie.` : '';
+  const extraFields = `${aiOn('tips') ? ',"tips":[{"tekst":"...","ingredienten":["1 el ..."],"stap":"...","na":3}]' : ''}${aiOn('uitleg') ? ',"uitleg":"..."' : ''}${fam ? ',"letop":["..."]' : ''}`;
+  return `Zet het recept om naar mijn eigen receptvorm.
+${bronRegel}
+Blijf trouw aan het origineel: dezelfde ingrediënten en dezelfde volgorde, tenzij ik hieronder om een wijziging vraag.${tweakNote}
+Schrijf in het Nederlands, tutoyeren. Maak van elke stap één korte, duidelijke zin met de tijden én de hoeveelheden erin, zodat ik hem tijdens het koken kan volgen. Zet hoeveelheden in het metrieke stelsel (g, ml, el, tl).${tipsNote}${uitlegNote}${famNote}
+${equipPrompt()}${staart || ''}
+Antwoord met UITSLUITEND geldige JSON, geen markdown:
+{"name":"","type":"dinner","mins":30,"serves":2,"level":"easy","ingredients":["..."],"steps":["..."]${extraFields}}
+"type" is een van: ${TYPES.map(t=>t.id).join(', ')}. "level" is easy, medium of hard.`;
+}
+
+/* wat er misging bij het inladen, netjes op het scherm */
+function importFout(e){
+  lastAiError = e.message || String(e);
+  const noKey = !aiKey();
+  $('screen').innerHTML = `<h1 class="title hand">${noKey ? 'AI-sleutel nodig' : 'Niet gelukt'}</h1>
+    <p class="subtitle">${noKey
+      ? `Om een recept in te laden heb ik je ${esc(dienst().merk)} API-sleutel nodig. Die vul je in bij Jij → AI-sleutel.`
+      : 'De AI-dienst gaf deze melding terug:'}</p>
+    ${noKey ? '' : `<div class="sketch card"><div class="tx" style="font-size:17px;line-height:1.45">${esc(lastAiError)}</div></div>`}
+    ${noKey ? `<button class="btn fill wide" data-tab="profile">${ic('user','')} Naar AI-sleutel</button>` : ''}
+    <button class="btn ghost wide" data-go="import" style="margin-top:10px">Terug naar inladen</button>`;
+}
+
+/* een foto (of twee, bij een dubbele pagina) van een recept laten overschrijven */
+async function importFoto(files){
+  const lijst = [].slice.call(files).slice(0, 3);
+  if(!lijst.length) return;
+  /* wat er in de velden staat meenemen, ook als de foto van elders komt */
+  if($('imp-tweak')) impTweak = $('imp-tweak').value.trim();
+  if($('imp-in')) impText = $('imp-in').value.trim();
+  $('screen').innerHTML = `<h1 class="title hand">Even kijken…</h1>
+    <p class="subtitle">Ik lees ${lijst.length === 1 ? 'de foto' : `de ${lijst.length} foto's`} en schrijf het recept over in jouw vorm.</p>${PAN_DRAWING}`;
+  let beelden;
+  try{
+    beelden = await Promise.all(lijst.map(fileToB64));
+  }catch(e){
+    importFout(new Error('Ik kon de foto niet lezen. Probeer een andere foto.')); return;
+  }
+  const bron = lijst.length === 1
+    ? "Het staat op de foto hierbij — een bladzijde uit een kookboek of tijdschrift, een kaartje, een schermafbeelding of iets met de hand geschreven. Lees alles wat er staat, ook in de kantlijn."
+    : `Het staat op de ${lijst.length} foto's hierbij (samen één recept, bijvoorbeeld een dubbele pagina). Lees ze in volgorde en maak er één recept van.`;
+  const staart = `
+Neem de naam, de ingrediënten met hun hoeveelheden en de stappen over zoals ze er staan. Staat het aantal personen, de tijd of het soort maaltijd er niet bij, schat dat dan realistisch. Kun je een woord echt niet lezen, laat het dan weg in plaats van te gokken.`;
+  try{
+    const inhoud = beelden.map(img => ({type:'image', source:{type:'base64', media_type:img.media_type, data:img.data}}));
+    inhoud.push({type:'text', text: importPrompt(bron, staart)});
+    let r = JSON.parse(extractJson(await aiRequest({model:AI_MODEL, max_tokens:4000, messages:[{role:'user', content:inhoud}]})));
+    if(Array.isArray(r)) r = r[0];
+    if(!showCandidates(r)) throw new Error('Ik kon er geen recept uit halen. Probeer een scherpere foto, of typ het over in het vak eronder.');
+  }catch(e){ importFout(e); }
+}
+
 async function importRecipe(){
   const raw = impText.trim();
   if(!raw){ toast('Plak eerst een recept of een link'); return; }
@@ -1924,28 +2000,15 @@ async function importRecipe(){
     }catch(e){}
   }
   const isLink = /^https?:\/\//i.test(raw) || /^www\./i.test(raw);
-  const tweakNote = tweak ? ` Pas het recept aan volgens deze wens en verwerk dat overal — in de naam, de ingrediënten én de stappen: ${tweak}.` : '';
-  const tipsNote = aiOn('tips') ? ' Geef in "tips" twee tot vier suggesties voor extra ingrediënten of kruiden. Werk elke tip uit met "tekst", "ingredienten" (met hoeveelheid), "stap" en "na" (het stapnummer waarna die stap komt).' : '';
-  const uitlegNote = aiOn('uitleg') ? ' Leg in "uitleg" in twee tot vier zinnen uit hoe de belangrijkste techniek werkt en waarom je het zo doet.' : '';
-  const fam = familyPrompt();
-  const famNote = fam ? `${fam}
-Botst het originele recept met deze regels? Pas het dan aan zodat het wél kan — schrijf het veilige alternatief gewoon in de ingrediënten en de stappen — en zet in "letop" per aanpassing één zin: wat je veranderde en voor wie.` : '';
-  const extraFields = `${aiOn('tips') ? ',"tips":[{"tekst":"...","ingredienten":["1 el ..."],"stap":"...","na":3}]' : ''}${aiOn('uitleg') ? ',"uitleg":"..."' : ''}${fam ? ',"letop":["..."]' : ''}`;
   $('screen').innerHTML = `<h1 class="title hand">Even lezen…</h1>
     <p class="subtitle">${isLink ? 'Ik haal het recept op en schrijf het over.' : 'Ik schrijf het recept over in jouw vorm.'}</p>${PAN_DRAWING}`;
-  const prompt = `Zet het onderstaande recept om naar mijn eigen receptvorm.
-${isLink
-  ? 'Het is een link. Open hem, of zoek het recept op als de pagina niet te lezen is, en gebruik wat er echt in staat.'
-  : 'Het is geplakte tekst. Houd je aan wat er staat; vul alleen aan waar iets duidelijk ontbreekt.'}
-Blijf trouw aan het origineel: dezelfde ingrediënten en dezelfde volgorde, tenzij ik hieronder om een wijziging vraag.${tweakNote}
-Schrijf in het Nederlands, tutoyeren. Maak van elke stap één korte, duidelijke zin met de tijden én de hoeveelheden erin, zodat ik hem tijdens het koken kan volgen. Zet hoeveelheden in het metrieke stelsel (g, ml, el, tl).${tipsNote}${uitlegNote}${famNote}
-${equipPrompt()}
+  const bron = isLink
+    ? 'Het is een link. Open hem, of zoek het recept op als de pagina niet te lezen is, en gebruik wat er echt in staat.'
+    : 'Het staat hieronder als geplakte tekst. Houd je aan wat er staat; vul alleen aan waar iets duidelijk ontbreekt.';
+  const prompt = importPrompt(bron, `
 Recept:
 ${raw}
-
-Antwoord met UITSLUITEND geldige JSON, geen markdown:
-{"name":"","type":"dinner","mins":30,"serves":2,"level":"easy","ingredients":["..."],"steps":["..."]${extraFields}}
-"type" is een van: ${TYPES.map(t=>t.id).join(', ')}. "level" is easy, medium of hard.`;
+`);
   try{
     const req = {model:AI_MODEL, max_tokens:4000, messages:[{role:'user',content:prompt}]};
     if(isLink || aiOn('search')) req.tools = [{type:'web_search_20260209', name:'web_search', max_uses:3}];
@@ -1953,17 +2016,7 @@ Antwoord met UITSLUITEND geldige JSON, geen markdown:
     let r = JSON.parse(extractJson(txt));
     if(Array.isArray(r)) r = r[0];
     if(!showCandidates(r)) throw new Error('Ik kon er geen recept uit halen. Plak anders de hele tekst van het recept.');
-  }catch(e){
-    lastAiError = e.message || String(e);
-    const noKey = !aiKey();
-    $('screen').innerHTML = `<h1 class="title hand">${noKey ? 'AI-sleutel nodig' : 'Niet gelukt'}</h1>
-      <p class="subtitle">${noKey
-        ? 'Om een recept in te laden heb ik je Anthropic API-sleutel nodig. Die vul je in bij Jij → AI-sleutel.'
-        : 'De AI-dienst gaf deze melding terug:'}</p>
-      ${noKey ? '' : `<div class="sketch card"><div class="tx" style="font-size:17px;line-height:1.45">${esc(lastAiError)}</div></div>`}
-      ${noKey ? `<button class="btn fill wide" data-tab="profile">${ic('user','')} Naar AI-sleutel</button>` : ''}
-      <button class="btn ghost wide" data-go="import" style="margin-top:10px">Terug naar inladen</button>`;
-  }
+  }catch(e){ importFout(e); }
 }
 
 /* Een tip mag oude tekst zijn of een uitgewerkte tip met eigen ingrediënten
@@ -2431,7 +2484,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research],#ai-budget-save,#ai-usage-reset,#warnClose,#warnOk,#warnGo,[data-dienst],#ai-model-save');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,#imp-foto-btn,[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research],#ai-budget-save,#ai-usage-reset,#warnClose,#warnOk,#warnGo,[data-dienst],#ai-model-save');
   if(!t) return;
 
   if(t.dataset.tab){ go(t.dataset.tab); return; }
@@ -2552,6 +2605,11 @@ document.addEventListener('click', async (e)=>{
   if(t.dataset.pan){ S.pantry = S.pantry.filter(p=>p!==t.dataset.pan); await persist(); render(); return; }
   if(t.id === 'pan-photo-btn'){ $('pan-photo-input').click(); return; }
   if(t.id === 'imp-file-btn'){ $('imp-file').click(); return; }
+  if(t.id === 'imp-foto-btn'){
+    impText = ($('imp-in') ? $('imp-in').value : '').trim();
+    impTweak = ($('imp-tweak') ? $('imp-tweak').value : '').trim();
+    $('imp-foto').click(); return;
+  }
   if(t.id === 'cookQGo'){ await cookQuestion(); return; }
   if(t.id === 'cookAnsX'){ cookAns = null; drawCookAsk(); return; }
   if(t.dataset.careon !== undefined && careAsk){
@@ -2751,6 +2809,7 @@ document.addEventListener('change', async e=>{
   if(e.target.dataset.slider){ S.prefs[e.target.dataset.slider] = +e.target.value; await persist(); }
   if(e.target.id === 'pan-photo-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; if(f) scanPantry(f); }
   if(e.target.id === 'imp-file'){ const f = e.target.files && e.target.files[0]; e.target.value=''; if(f) loadRecipeFile(f); }
+  if(e.target.id === 'imp-foto'){ const fs = e.target.files; const lijst = fs ? [].slice.call(fs) : []; e.target.value=''; if(lijst.length) importFoto(lijst); }
   /* sleutel ook bewaren als je het veld verlaat zonder op ✓ te drukken */
   if(e.target.id === 'ai-key'){ saveAiKey(e.target.value); }
 });
