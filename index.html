@@ -356,7 +356,7 @@
 const KEY = 'panklaar:v1';
 /* Wordt bij het uitrollen gelijkgezet met de cache van de service worker,
    zodat je in de app kunt zien welke versie je telefoon vasthoudt. */
-const APP_VERSIE = 'v30';
+const APP_VERSIE = 'v31';
 let mem = null;
 
 /* IndexedDB als primaire opslag (standalone site); valt terug op de
@@ -933,6 +933,8 @@ let S = {
 };
 let impText = '', impTweak = '', impTitel = '';
 let impFotos = [];   /* foto's die klaarstaan om omgezet te worden */
+let vakOpen = {ai:false, gebruik:false, backup:false, app:false};
+const vak = k => !!vakOpen[k];
 let helpOpen = false, famOpen = false, prefOpen = false, equipOpen = false, pantOpen = false, ask = null, suggestions = [];
 let picked = new Set();   /* welke voorstellen aangevinkt staan om te bewaren */
 
@@ -1551,6 +1553,10 @@ function viewProfile(){
     <div class="chips" style="margin-bottom:20px">
       ${EQUIPMENT.map(e=>`<button class="chip ${(S.equip||[]).includes(e.id)?'on':''}" data-equip="${e.id}">${e.label}</button>`).join('')}
     </div>` : ''}
+    ${vakKop('ai', 'AI en sleutel', aiKey()
+      ? `${dienst().label} · ${aiModel()}`
+      : `Nog geen sleutel · ${dienst().label}`)}
+    ${vak('ai') ? `
     <div class="eyebrow"><span>AI-dienst</span></div>
     <div class="chips" style="margin-bottom:8px">
       ${Object.keys(DIENSTEN).map(k=>`<button class="chip ${dienstId()===k?'on':''}" data-dienst="${k}">${DIENSTEN[k].label}</button>`).join('')}
@@ -1586,8 +1592,25 @@ function viewProfile(){
     <button class="btn ghost wide" id="ai-test" style="margin-bottom:10px">${ic('spark','')} Sleutel testen</button>
     ${lastAiError ? `<div class="sketch soft card" style="margin-bottom:14px">
       <div class="muted" style="font-size:14px;line-height:1.45">Laatste AI-melding: ${esc(lastAiError)}</div>
+    </div>` : ''}` : ''}
+
+    ${vakKop('gebruik', 'AI-gebruik', `${dollar(maandVak(maandNu()).kosten)} deze maand · van ${dollar(budget())}`)}
+    ${vak('gebruik') ? gebruikBlok() : ''}
+
+    ${vakKop('backup', 'Back-up', `${S.recipes.length} recepten · bewaren of terugzetten`)}
+    ${vak('backup') ? `
+    <div class="muted" style="font-size:14px;margin:0 4px 10px;line-height:1.45">
+      Alles staat op dit apparaat en nergens anders. Maak af en toe een back-up: één bestand met je recepten, foto's, gezinsleden, voorkeuren, voorraad, lijst en weekplanning. Je AI-sleutel gaat er bewust niet in.
+    </div>
+    <button class="btn fill wide" id="backup-maak" style="margin-bottom:10px">${ic('save','')} Back-up maken</button>
+    <button class="btn wide" id="backup-terug" style="margin-bottom:10px">${ic('inbox','')} Back-up terugzetten</button>
+    <input type="file" accept=".json,application/json" id="backup-input" class="bestandveld" aria-hidden="true" tabindex="-1">
+    <div class="muted" style="font-size:14px;margin:0 4px 20px;line-height:1.45">
+      Bewaren kan in Bestanden, iCloud of je mail — waar je hem later terugvindt. Terugzetten vervangt alles wat er nu in de app staat.
     </div>` : ''}
-    ${gebruikBlok()}
+
+    ${vakKop('app', 'App', `${APP_VERSIE} · weergave, vegen, opslag`)}
+    ${vak('app') ? `
     <div class="eyebrow"><span>Bediening</span></div>
     <div class="chips" style="margin-bottom:8px">
       <button class="chip ${veegAan()?'on':''}" data-veeg="1">Terugvegen ${veegAan()?'aan':'uit'}</button>
@@ -1600,15 +1623,6 @@ function viewProfile(){
       ${[['auto','Auto'],['light','Daglicht'],['dark','Schoolbord']].map(([v,l])=>
         `<button class="chip ${S.theme===v?'on':''}" data-theme="${v}">${l}</button>`).join('')}
     </div>
-    ${opslagOk ? '' : `
-    <div class="eyebrow"><span>Opslag werkt niet</span></div>
-    <div class="sketch card" style="margin-bottom:20px">
-      <div style="font-size:17px;line-height:1.45">
-        Deze telefoon of browser bewaart niets van Panklaar. Alles wat je nu invult is weg zodra je de app sluit.
-        Dat komt meestal door een privévenster, of doordat de opslag vol zit. Open Panklaar in een gewoon venster,
-        of maak ruimte vrij, en probeer het opnieuw.
-      </div>
-    </div>` }
     <div class="eyebrow"><span>Versie</span></div>
     <div class="sketch card" style="margin-bottom:10px">
       <div class="row">
@@ -1622,12 +1636,22 @@ function viewProfile(){
     <div class="muted" style="font-size:14px;margin:0 4px 20px;line-height:1.45">
       Werkt iets niet zoals beschreven? Dan houdt je telefoon waarschijnlijk een oudere versie vast. Deze knop haalt de nieuwste op; je recepten, lijst en instellingen blijven gewoon staan.
     </div>
-    <div class="sketch card">
+    <div class="sketch card" style="margin-bottom:20px">
       <div class="muted" style="font-size:17px;line-height:1.45">
         ${S.recipes.length} recepten · ${S.pantry.length} in voorraad · ${S.shopping.length} op de lijst.
         Alles blijft op dit apparaat.
       </div>
-    </div>
+    </div>` : ''}
+
+    ${opslagOk ? '' : `
+    <div class="eyebrow"><span>Opslag werkt niet</span></div>
+    <div class="sketch card" style="margin-bottom:20px">
+      <div style="font-size:17px;line-height:1.45">
+        Deze telefoon of browser bewaart niets van Panklaar. Alles wat je nu invult is weg zodra je de app sluit.
+        Dat komt meestal door een privévenster, of doordat de opslag vol zit. Open Panklaar in een gewoon venster,
+        of maak ruimte vrij, en probeer het opnieuw.
+      </div>
+    </div>` }
     ${WHISK_SPOON_DRAWING}
   `;
 }
@@ -1734,6 +1758,16 @@ function viewMemberEdit(id){
     <button class="btn fill wide" data-savemember="${m?m.id:'new'}">${ic('check','')} Gezinslid opslaan</button>
     ${m?`<button class="btn ghost wide" data-memberdel="${m.id}" style="margin-top:10px">${ic('trash','')} Gezinslid verwijderen</button>`:''}
   `;
+}
+
+/* kop van een uitklapbaar vakje bij Jij */
+function vakKop(k, titel, onder){
+  return `<div class="sketch card" data-vak="${k}" style="cursor:pointer;margin-bottom:14px">
+    <div class="row">
+      <div class="grow"><div class="name hand">${esc(titel)}</div><div class="meta">${esc(onder)}</div></div>
+      <span class="fam-chev ${vak(k)?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
+    </div>
+  </div>`;
 }
 
 /* Wat de AI deze maand heeft gekost, en hoeveel er nog over is */
@@ -1943,6 +1977,68 @@ function toonBudgetMelding(grens, m, b){
   $('warn').classList.add('on');
 }
 
+/* Eén bestand met alles erin. De AI-sleutel gaat er bewust niet in: die
+   hoort bij dit apparaat en heeft in een back-up niets te zoeken. */
+function backupTekst(){
+  return JSON.stringify({
+    app:'panklaar', versie:APP_VERSIE, gemaakt:new Date().toISOString(), data:pack()
+  }, null, 1);
+}
+async function maakBackup(){
+  const txt = backupTekst();
+  const naam = `panklaar-${new Date().toISOString().slice(0,10)}.json`;
+  /* op een telefoon is delen handiger dan downloaden: dan kun je hem in
+     Bestanden of iCloud zetten, of naar jezelf mailen */
+  try{
+    if(navigator.canShare && window.File){
+      const bestand = new File([txt], naam, {type:'application/json'});
+      if(navigator.canShare({files:[bestand]})){
+        await navigator.share({files:[bestand], title:'Panklaar back-up'});
+        toast('Back-up gedeeld'); return;
+      }
+    }
+  }catch(e){
+    if(e && e.name === 'AbortError') return;
+  }
+  try{
+    const url = URL.createObjectURL(new Blob([txt], {type:'application/json'}));
+    const a = document.createElement('a');
+    a.href = url; a.download = naam;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 8000);
+    toast(`Back-up gemaakt: ${naam}`);
+  }catch(e){
+    toast('Back-up maken lukte niet op dit apparaat');
+  }
+}
+/* eerst laten zien wat erin zit, dan pas terugzetten */
+function backupInlezen(file){
+  const r = new FileReader();
+  r.onload = ()=>{
+    let b;
+    try{ b = JSON.parse(String(r.result)); }
+    catch(e){ toast('Dit is geen back-upbestand van Panklaar'); return; }
+    const d = b && (b.data || (b.recipes ? b : null));
+    if(!d || !Array.isArray(d.recipes)){ toast('Dit is geen back-upbestand van Panklaar'); return; }
+    const datum = b.gemaakt ? new Date(b.gemaakt).toLocaleDateString('nl-NL') : 'onbekend';
+    openMenu('Terugzetten?', [
+      {label:`In dit bestand: ${(d.recipes||[]).length} recepten, ${(d.family||[]).length} gezinsleden, ${(d.shopping||[]).length} op de lijst — gemaakt op ${datum}. Terugzetten vervangt alles wat er nu in de app staat.`, info:true},
+      {label:'Ja, alles vervangen', icon:'check', gevaar:true, doe:async ()=>{
+        closeMenu();
+        Object.assign(S, d);
+        if(!S.prefs) S.prefs = {...DEFAULT_PREFS};
+        if(!S.timers) S.timers = [];
+        applyTheme();
+        await persist(); go('recipes');
+        toast(`${(d.recipes||[]).length} recepten teruggezet`);
+      }},
+      {label:'Nee, laten zoals het is', icon:'back', doe:closeMenu}
+    ]);
+  };
+  r.onerror = ()=>toast('Dit bestand kon ik niet lezen');
+  r.readAsText(file);
+}
+
 /* De telefoon dwingen de nieuwste versie op te halen. Alleen de opslag van
    de app-bestanden gaat weg; recepten en instellingen staan in IndexedDB
    en blijven staan. */
@@ -1983,7 +2079,11 @@ function openMenu(titel, items){
       <span class="h hand" style="font-size:25px">${esc(titel)}</span>
       <button class="back" id="menuClose" aria-label="Sluiten"><svg viewBox="0 0 24 24"><path d="M18.4 5.4 5.7 18.3M5.5 5.6l12.9 12.7"/></svg></button>
     </div>
-    ${items.map((it,i)=>`<button class="menu-item ${it.gevaar?'gevaar':''}" data-menu="${i}">
+    ${items.map((it,i)=> it.info
+      ? `<div class="sketch soft card" style="margin-bottom:10px">
+          <div class="muted" style="font-size:16px;line-height:1.45">${esc(it.label)}</div>
+        </div>`
+      : `<button class="menu-item ${it.gevaar?'gevaar':''}" data-menu="${i}">
       <svg class="ic" viewBox="0 0 24 24">${I[it.icon] || I.chev}</svg>
       <span>${esc(it.label)}</span>
     </button>`).join('')}`;
@@ -2905,7 +3005,9 @@ function beep(){
 }
 
 /* ---------------- actions ---------------- */
-function pack(){ return {recipes:S.recipes, shopping:S.shopping, pantry:S.pantry, plan:S.plan, theme:S.theme, family:S.family, equip:S.equip, prefs:S.prefs, timers:S.timers}; }
+function pack(){ return {recipes:S.recipes, shopping:S.shopping, pantry:S.pantry, plan:S.plan,
+  theme:S.theme, family:S.family, equip:S.equip, prefs:S.prefs, timers:S.timers,
+  usage:S.usage, budget:S.budget, aiDienst:S.aiDienst, aiModellen:S.aiModellen}; }
 let opslagOk = true;
 async function persist(){
   const ok = await saveData(pack());
@@ -2946,7 +3048,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,#imp-foto-btn,[data-fotorm],[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research],#ai-budget-save,#ai-usage-reset,#warnClose,#warnOk,#warnGo,[data-dienst],#ai-model-save,[data-recfoto],#app-update,[data-veeg],#f-foto,[data-fotoweg],[data-menu],#menuClose');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,#imp-foto-btn,[data-fotorm],[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research],#ai-budget-save,#ai-usage-reset,#warnClose,#warnOk,#warnGo,[data-dienst],#ai-model-save,[data-recfoto],[data-vak],#backup-maak,#backup-terug,#app-update,[data-veeg],#f-foto,[data-fotoweg],[data-menu],#menuClose');
   if(!t) return;
   if(slikKlik){ slikKlik = false; return; }
 
@@ -3085,6 +3187,9 @@ document.addEventListener('click', async (e)=>{
     if(r){ delete r.foto; await persist(); render(); toast('Foto weg'); }
     return;
   }
+  if(t.dataset.vak){ vakOpen[t.dataset.vak] = !vak(t.dataset.vak); render(); return; }
+  if(t.id === 'backup-maak'){ await maakBackup(); return; }
+  if(t.id === 'backup-terug'){ $('backup-input').click(); return; }
   if(t.id === 'app-update'){ await haalNieuwsteVersie(); return; }
   if(t.dataset.veeg){
     S.prefs.veeg = !veegAan();
@@ -3366,6 +3471,7 @@ document.addEventListener('change', async e=>{
   }
   if(e.target.dataset.slider){ S.prefs[e.target.dataset.slider] = +e.target.value; await persist(); }
   if(e.target.id === 'pan-photo-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; if(f) scanPantry(f); }
+  if(e.target.id === 'backup-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; if(f) backupInlezen(f); }
   if(e.target.id === 'imp-file'){ const f = e.target.files && e.target.files[0]; e.target.value=''; if(f) loadRecipeFile(f); }
   if(e.target.id === 'rec-foto-input'){
     const f = e.target.files && e.target.files[0]; e.target.value = '';

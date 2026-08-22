@@ -54,6 +54,10 @@ het apparaat (IndexedDB).
   [`recepten/`](recepten) staan er een paar klaar.
 - **Boodschappenlijst** (gegroepeerd per gerecht, hoeveelheden worden bij elkaar
   opgeteld) en **weekplanner**.
+- **Back-up**: onder Jij maak je één bestand met alles erin (recepten met
+  foto's, gezinsleden, voorkeuren, voorraad, lijst, weekplanning en de
+  instellingen) om te bewaren of te delen, en zet je het later weer terug. De
+  API-sleutel gaat er bewust niet in.
 - Installeerbare **PWA**, werkt offline (behalve de AI-functies).
 
 ## AI-functies
