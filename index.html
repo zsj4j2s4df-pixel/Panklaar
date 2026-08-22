@@ -334,6 +334,9 @@
    as a standalone PWA; nothing else in the app touches storage.
    ============================================================ */
 const KEY = 'panklaar:v1';
+/* Wordt bij het uitrollen gelijkgezet met de cache van de service worker,
+   zodat je in de app kunt zien welke versie je telefoon vasthoudt. */
+const APP_VERSIE = 'v27';
 let mem = null;
 
 /* IndexedDB als primaire opslag (standalone site); valt terug op de
@@ -1565,10 +1568,30 @@ function viewProfile(){
       <div class="muted" style="font-size:14px;line-height:1.45">Laatste AI-melding: ${esc(lastAiError)}</div>
     </div>` : ''}
     ${gebruikBlok()}
+    <div class="eyebrow"><span>Bediening</span></div>
+    <div class="chips" style="margin-bottom:8px">
+      <button class="chip ${veegAan()?'on':''}" data-veeg="1">Terugvegen ${veegAan()?'aan':'uit'}</button>
+    </div>
+    <div class="muted" style="font-size:14px;margin:0 4px 20px;line-height:1.45">
+      Een veeg van links naar rechts gaat een stap terug. Werkt dat op jouw telefoon niet prettig, zet het dan uit — de terugknoppen blijven gewoon werken.
+    </div>
     <div class="eyebrow"><span>Weergave</span></div>
     <div class="chips" style="margin-bottom:20px">
       ${[['auto','Auto'],['light','Daglicht'],['dark','Schoolbord']].map(([v,l])=>
         `<button class="chip ${S.theme===v?'on':''}" data-theme="${v}">${l}</button>`).join('')}
+    </div>
+    <div class="eyebrow"><span>Versie</span></div>
+    <div class="sketch card" style="margin-bottom:10px">
+      <div class="row">
+        <div class="grow">
+          <div class="name hand">Panklaar ${APP_VERSIE}</div>
+          <div class="meta">Dit is de versie die op dit apparaat draait</div>
+        </div>
+      </div>
+    </div>
+    <button class="btn wide" id="app-update" style="margin-bottom:10px">${ic('spark','')} Nieuwste versie ophalen</button>
+    <div class="muted" style="font-size:14px;margin:0 4px 20px;line-height:1.45">
+      Werkt iets niet zoals beschreven? Dan houdt je telefoon waarschijnlijk een oudere versie vast. Deze knop haalt de nieuwste op; je recepten, lijst en instellingen blijven gewoon staan.
     </div>
     <div class="sketch card">
       <div class="muted" style="font-size:17px;line-height:1.45">
@@ -1889,6 +1912,27 @@ function toonBudgetMelding(grens, m, b){
       Dit is een schatting op basis van de tokens die de AI teruggeeft. Je echte tegoed staat bij de dienst zelf.
     </div>`;
   $('warn').classList.add('on');
+}
+
+/* De telefoon dwingen de nieuwste versie op te halen. Alleen de opslag van
+   de app-bestanden gaat weg; recepten en instellingen staan in IndexedDB
+   en blijven staan. */
+async function haalNieuwsteVersie(){
+  toast('Nieuwste versie ophalen…');
+  try{
+    if(navigator.serviceWorker){
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r=>r.unregister()));
+    }
+  }catch(e){}
+  try{
+    if(window.caches){
+      const ks = await caches.keys();
+      await Promise.all(ks.map(k=>caches.delete(k)));
+    }
+  }catch(e){}
+  const schoon = location.pathname + '?v=' + Date.now();
+  setTimeout(()=>{ location.replace(schoon); }, 300);
 }
 
 /* Klein keuzemenu — voor de foto en voor lang indrukken op een recept */
@@ -2844,7 +2888,7 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,#imp-foto-btn,[data-fotorm],[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research],#ai-budget-save,#ai-usage-reset,#warnClose,#warnOk,#warnGo,[data-dienst],#ai-model-save,[data-recfoto],#f-foto,[data-fotoweg],[data-menu],#menuClose');
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,#imp-foto-btn,[data-fotorm],[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research],#ai-budget-save,#ai-usage-reset,#warnClose,#warnOk,#warnGo,[data-dienst],#ai-model-save,[data-recfoto],#app-update,[data-veeg],#f-foto,[data-fotoweg],[data-menu],#menuClose');
   if(!t) return;
   if(slikKlik){ slikKlik = false; return; }
 
@@ -2981,6 +3025,13 @@ document.addEventListener('click', async (e)=>{
   if(t.dataset.fotoweg){
     const r = S.recipes.find(x=>x.id===t.dataset.fotoweg);
     if(r){ delete r.foto; await persist(); render(); toast('Foto weg'); }
+    return;
+  }
+  if(t.id === 'app-update'){ await haalNieuwsteVersie(); return; }
+  if(t.dataset.veeg){
+    S.prefs.veeg = !veegAan();
+    await persist(); render();
+    toast(veegAan() ? 'Terugvegen staat aan' : 'Terugvegen staat uit');
     return;
   }
   if(t.id === 'menuClose'){ closeMenu(); return; }
@@ -3183,6 +3234,8 @@ document.addEventListener('keydown', e=>{
    voor de 380 ms meer dan 8 px, dan is het geen lange druk maar een veeg. */
 let raak = null, drukKlok = null, slikKlik = false;
 
+const veegAan = () => !(S.prefs && S.prefs.veeg === false);
+
 /* waar 'terug' heen gaat, gezien wat er nu openstaat */
 function veegTerug(){
   if(menuData){ closeMenu(); return true; }
@@ -3236,7 +3289,7 @@ document.addEventListener('pointerup', e=>{
   if(!raak) return;
   const dx = e.clientX - raak.x, dy = e.clientY - raak.y, tijd = Date.now() - raak.t;
   const r = raak; raak = null;
-  if(!r.veeg) return;
+  if(!r.veeg || !veegAan()) return;
   /* echt zijwaarts bedoeld: ruim naar rechts en veel meer horizontaal dan verticaal */
   if(dx > 90 && Math.abs(dy) < 45 && Math.abs(dx) > Math.abs(dy) * 2.5 && tijd < 700){
     if(veegTerug()) slikKlik = true;
@@ -3306,9 +3359,21 @@ document.addEventListener('input', e=>{
 })();
 </script>
 <script>
-/* PWA: service worker registreren voor offline gebruik en installeren */
+/* PWA: service worker registreren, en meteen kijken of er een nieuwe
+   versie klaarstaat. Neemt die het over, dan laden we een keer opnieuw,
+   zodat je nooit op een oude versie blijft hangen. */
 if('serviceWorker' in navigator){
-  window.addEventListener('load', ()=>{ navigator.serviceWorker.register('service-worker.js').catch(()=>{}); });
+  const alDaar = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', ()=>{
+    if(!alDaar || window.__herladen) return;
+    window.__herladen = true; location.reload();
+  });
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('service-worker.js')
+      .then(reg=>{ try{ reg.update(); }catch(e){} })
+      .catch(()=>{});
+  });
+  setInterval(()=>{ navigator.serviceWorker.getRegistration().then(r=>{ if(r) try{ r.update(); }catch(e){} }); }, 30*60*1000);
 }
 </script>
 </body>
