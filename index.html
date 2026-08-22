@@ -178,6 +178,9 @@
     stroke-linecap:round;stroke-linejoin:round;}
   .menu-item.gevaar{color:#a02020;}
   .menu-item.gevaar .ic{stroke:#a02020;}
+  /* niet display:none — dan opent iOS de fotokiezer niet */
+  .bestandveld{position:absolute;top:0;left:0;width:1px;height:1px;opacity:0;
+    border:0;padding:0;pointer-events:none;}
   .imp-fotos{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px;}
   .imp-foto{position:relative;}
   .imp-foto img{width:88px;height:110px;object-fit:cover;border:2px solid var(--ink);
@@ -335,7 +338,7 @@
     <div class="sheet-card"></div>
   </div>
 
-  <input type="file" accept="image/*" id="rec-foto-input" style="display:none">
+  <input type="file" accept="image/*" id="rec-foto-input" class="bestandveld" aria-hidden="true" tabindex="-1">
 
   <div class="toast" id="toast"></div>
 
@@ -353,7 +356,7 @@
 const KEY = 'panklaar:v1';
 /* Wordt bij het uitrollen gelijkgezet met de cache van de service worker,
    zodat je in de app kunt zien welke versie je telefoon vasthoudt. */
-const APP_VERSIE = 'v29';
+const APP_VERSIE = 'v30';
 let mem = null;
 
 /* IndexedDB als primaire opslag (standalone site); valt terug op de
@@ -1361,7 +1364,7 @@ function viewShopping(){
     </div>
     ${pantOpen ? `
     <button class="btn wide" id="pan-photo-btn" style="margin-bottom:8px">${ic('camera','')} Foto maken</button>
-    <input type="file" accept="image/*" id="pan-photo-input" style="display:none">
+    <input type="file" accept="image/*" id="pan-photo-input" class="bestandveld" aria-hidden="true" tabindex="-1">
     <div class="muted" style="font-size:14px;margin:0 4px 12px;line-height:1.4">Maak een foto van je koelkast of kast — ik herken de ingrediënten. Of typ ze hieronder.</div>
     <div class="split" style="margin-bottom:14px">
       <input class="inp" id="pan-in" placeholder="Ingrediënt typen" style="flex:1">
@@ -2094,13 +2097,42 @@ function schaalFoto(dataUrl, max, kwal){
     img.src = dataUrl;
   });
 }
-function bestandNaarFoto(file){
-  return new Promise((res, rej)=>{
-    const r = new FileReader();
-    r.onload = ()=>schaalFoto(String(r.result)).then(res, rej);
-    r.onerror = ()=>rej(new Error('Die foto kon ik niet lezen'));
-    r.readAsDataURL(file);
-  });
+/* Een foto van de telefoon inlezen. Safari geeft soms een HEIC-bestand dat
+   een gewone <img> niet aankan; createImageBitmap lukt dan meestal wel. */
+async function bestandNaarBeeld(file){
+  if(window.createImageBitmap){
+    try{ return await createImageBitmap(file); }catch(e){}
+  }
+  const url = URL.createObjectURL(file);
+  try{
+    return await new Promise((res, rej)=>{
+      const img = new Image();
+      img.onload = ()=>res(img);
+      img.onerror = ()=>rej(new Error('Deze foto kon ik niet openen. Probeer er een schermafbeelding van te maken en die te kiezen.'));
+      img.src = url;
+    });
+  } finally { setTimeout(()=>URL.revokeObjectURL(url), 4000); }
+}
+function beeldNaarJpeg(beeld, max, kwal){
+  max = max || 900; kwal = kwal || 0.82;
+  const bw = beeld.width || beeld.naturalWidth, bh = beeld.height || beeld.naturalHeight;
+  if(!bw || !bh) throw new Error('Deze foto kwam leeg binnen.');
+  const f = Math.min(1, max / Math.max(bw, bh));
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(bw * f); cv.height = Math.round(bh * f);
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.drawImage(beeld, 0, 0, cv.width, cv.height);
+  const uit = cv.toDataURL('image/jpeg', kwal);
+  cv.width = cv.height = 1;
+  if(beeld.close) try{ beeld.close(); }catch(e){}
+  /* een leeg vel (te weinig geheugen) is klein; een echt klein plaatje ook,
+     dus alleen klagen als het origineel wél groot was */
+  if(uit.length < 3000 && bw * bh > 40000) throw new Error('Deze foto kwam leeg binnen. Probeer een andere foto.');
+  return uit;
+}
+async function bestandNaarFoto(file, max){
+  return beeldNaarJpeg(await bestandNaarBeeld(file), max || 900, 0.82);
 }
 
 /* Een plaatje láten maken kan alleen bij OpenAI; Claude maakt geen beelden. */
@@ -2137,28 +2169,17 @@ async function fotoVanAi(r){
 /* Een foto van een telefoon is al gauw vijf megabyte. Drie daarvan in één
    aanvraag komt niet aan — de verbinding klapt eruit voordat er een antwoord
    is. Daarom eerst verkleinen; tekst op een bladzijde blijft goed leesbaar. */
-function fileToB64(file, max){
-  return new Promise((res,rej)=>{
-    const r = new FileReader();
-    r.onload = () => {
-      const ruw = String(r.result);
-      schaalFoto(ruw, max || 1400, 0.85).then(klein=>{
-        const m = /data:(.*?);base64,(.*)$/.exec(klein) || /data:(.*?);base64,(.*)$/.exec(ruw);
-        if(m) res({media_type:m[1], data:m[2]}); else rej(new Error('Die foto kon ik niet lezen'));
-      }, ()=>{
-        const m = /data:(.*?);base64,(.*)$/.exec(ruw);
-        if(m) res({media_type:m[1], data:m[2]}); else rej(new Error('Die foto kon ik niet lezen'));
-      });
-    };
-    r.onerror = () => rej(new Error('Die foto kon ik niet lezen'));
-    r.readAsDataURL(file);
-  });
+async function fileToB64(file, max){
+  const klein = beeldNaarJpeg(await bestandNaarBeeld(file), max || 1400, 0.85);
+  const m = /data:(.*?);base64,(.*)$/.exec(klein);
+  if(!m) throw new Error('Deze foto kon ik niet klaarzetten.');
+  return {media_type:m[1], data:m[2]};
 }
 const mB = txt => Math.round(String(txt).length / 1024 / 1024 * 10) / 10;
 async function scanPantry(file){
   toast('Foto wordt bekeken…');
   let img;
-  try{ img = await fileToB64(file, 1100); }catch(e){ toast('Kon de foto niet lezen'); return; }
+  try{ img = await fileToB64(file, 1100); }catch(e){ toast(e.message || 'Kon de foto niet lezen'); return; }
   try{
     const txt = await aiRequest({ model:AI_MODEL, max_tokens:600, messages:[{role:'user', content:[
       {type:'image', source:{type:'base64', media_type:img.media_type, data:img.data}},
@@ -2196,7 +2217,7 @@ function viewImport(){
     <button class="btn ${impFotos.length?'':'fill'} wide" id="imp-foto-btn" style="margin-bottom:6px">
       ${ic('camera','')} ${impFotos.length ? 'Nog een foto toevoegen' : 'Foto toevoegen'}
     </button>
-    <input type="file" accept="image/*" multiple id="imp-foto" style="display:none">
+    <input type="file" accept="image/*" multiple id="imp-foto" class="bestandveld" aria-hidden="true" tabindex="-1">
     ${DIVIDER}
     <div class="eyebrow"><span>2 · Of plak een recept</span></div>
     <div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">
@@ -2226,7 +2247,7 @@ function viewImport(){
       Een receptbestand (.json) inladen gaat buiten de AI om — je hebt er geen sleutel voor nodig.
     </div>
     <button class="btn wide" id="imp-file-btn">${ic('inbox','')} Bestand kiezen</button>
-    <input type="file" accept=".json,.txt,application/json,text/plain" id="imp-file" style="display:none">
+    <input type="file" accept=".json,.txt,application/json,text/plain" id="imp-file" class="bestandveld" aria-hidden="true" tabindex="-1">
     ${BOARD_KNIFE_DRAWING}
   `;
 }
@@ -2326,19 +2347,20 @@ async function voegFotosToe(files){
   leesImpVelden();
   const ruimte = Math.max(0, 3 - impFotos.length);
   if(!ruimte){ toast('Drie foto’s is het maximum'); return; }
+  toast(lijst.length === 1 ? 'Foto klaarzetten…' : 'Foto’s klaarzetten…');
   /* één voor één: twee grote foto's tegelijk verkleinen loopt op een
      telefoon uit z'n geheugen, en dan komt de tweede er leeg uit */
-  let mis = 0;
+  let fout = '';
   for(const f of lijst.slice(0, ruimte)){
     try{
       const b = await fileToB64(f);
       impFotos.push({mt:b.media_type, data:b.data});
-    }catch(e){ mis++; }
+    }catch(e){ fout = e.message || 'Deze foto kon ik niet lezen.'; }
   }
-  if(mis) toast(`${mis} foto kon ik niet lezen`);
-  if(!impFotos.length) return;
   render();
-  toast(`${impFotos.length} ${impFotos.length===1?'foto':'foto’s'} klaar — schrijf er eventueel iets bij`);
+  /* de melding als laatste, anders overschrijft 'klaar' de foutmelding */
+  if(fout) toast(fout);
+  else toast(`${impFotos.length} ${impFotos.length===1?'foto':'foto’s'} klaar — schrijf er eventueel iets bij`);
 }
 
 /* de foto's die klaarstaan laten overschrijven naar mijn receptvorm */
@@ -3352,7 +3374,7 @@ document.addEventListener('change', async e=>{
       try{
         const foto = await bestandNaarFoto(f);
         if(r){ r.foto = foto; await persist(); render(); toast('Foto toegevoegd'); }
-      }catch(err){ toast(err.message || 'Die foto kon ik niet lezen'); }
+      }catch(err){ toast(err.message || 'Deze foto kon ik niet lezen'); }
     }
   }
   if(e.target.id === 'imp-foto'){ const fs = e.target.files; const lijst = fs ? [].slice.call(fs) : []; e.target.value=''; if(lijst.length) voegFotosToe(lijst); }
