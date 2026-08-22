@@ -467,7 +467,7 @@ function getal(n){ return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g,
 function klokSignaal(ms){
   try{
     const c = new AbortController();
-    setTimeout(()=>{ try{ c.abort(); }catch(e){} }, ms || 120000);
+    setTimeout(()=>{ try{ c.abort(); }catch(e){} }, ms || 240000);
     return c.signal;
   }catch(e){ return undefined; }
 }
@@ -476,7 +476,9 @@ function klokSignaal(ms){
 function verbindingsFout(naam, e, lijf){
   const groot = lijf ? mB(lijf) : 0;
   if(e && e.name === 'AbortError'){
-    return `${naam} deed er te lang over en is gestopt.${groot > 1 ? ` De aanvraag was ${groot} MB — probeer het met minder of kleinere foto's.` : ' Probeer het nog eens.'}`;
+    return `${naam} deed er langer dan vier minuten over.${groot > 1
+      ? ` De aanvraag was ${groot} MB — probeer het met minder of kleinere foto's.`
+      : ' Vraag om minder recepten tegelijk, of zet bij Voorkeuren "Recepten opzoeken" uit — dat zoeken duurt het langst.'}`;
   }
   if(groot > 3){
     return `De aanvraag naar ${naam} was te groot (${groot} MB) en kwam niet aan. Probeer het met één foto tegelijk, of een foto van dichterbij.`;
@@ -504,11 +506,15 @@ async function openaiRequest(body){
   fotos.slice().reverse().forEach(f=>{
     inhoud.unshift({type:'input_image', image_url:`data:${f.media_type};base64,${f.data}`});
   });
+  /* gpt-5 denkt eerst na, en dat denken telt mee in de ruimte voor het
+     antwoord; met te weinig ruimte komt er alleen gedachte en geen recept */
+  const denkt = /gpt-5|^o[13]/i.test(aiModel());
   const req = {
     model: aiModel(),
     input: [{role:'user', content:inhoud}],
-    max_output_tokens: Math.max(256, +body.max_tokens || 1000)
+    max_output_tokens: Math.max(2000, Math.round((+body.max_tokens || 1000) * (denkt ? 2.5 : 1.2)))
   };
+  if(denkt) req.reasoning = {effort:'low'};
   if(body.tools && body.tools.length) req.tools = [{type:'web_search'}];
   const lijf = JSON.stringify(req);
   let res;
@@ -537,7 +543,7 @@ async function openaiRequest(body){
   if(!out){
     const reden = data.status === 'incomplete' && data.incomplete_details && data.incomplete_details.reason;
     throw new Error(reden === 'max_output_tokens'
-      ? `${aiModel()} kwam niet tot een antwoord binnen de ruimte die het kreeg. Kies een kleiner aantal recepten, of een ander model bij Jij → Model.`
+      ? `${aiModel()} was nog aan het nadenken toen de ruimte op was. Vraag om minder recepten tegelijk, of kies bij Jij → Model een model zonder denkstap, bijvoorbeeld gpt-4o-mini.`
       : `Leeg antwoord van OpenAI (model ${aiModel()}). Probeer een ander model bij Jij → Model.`);
   }
   return out;
@@ -572,10 +578,26 @@ async function aiRequest(body){
     boekGebruik(data.usage);
     out = data.content.filter(c=>c.type==='text').map(c=>c.text).join('');
     if(data.stop_reason === 'pause_turn'){ msgs = msgs.concat([{role:'assistant', content:data.content}]); continue; }
+    if(data.stop_reason === 'max_tokens'){
+      persist();
+      throw new Error('Het antwoord werd afgekapt omdat het te lang werd. Vraag om minder recepten tegelijk, of zet bij Voorkeuren "Tips" of "Uitleg" uit.');
+    }
     break;
   }
   persist(); letOpBudget();
   return out.replace(/```json|```/g,'').trim();
+}
+
+/* Een afgekapt antwoord geeft anders alleen 'JSON Parse error'. Dit zegt
+   wat er aan de hand is en wat je eraan kunt doen. */
+function leesRecept(txt){
+  let d;
+  try{ d = JSON.parse(extractJson(txt)); }
+  catch(e){
+    throw new Error('De AI stopte halverwege het antwoord. Vraag om minder recepten tegelijk, of zet bij Voorkeuren "Recepten opzoeken" of "Tips" even uit.');
+  }
+  if(Array.isArray(d)) return d[0];
+  return d;
 }
 
 /* het antwoord kan bij zoeken wat tekst rond de JSON hebben; pak het blok eruit */
@@ -1871,6 +1893,16 @@ function toonBudgetMelding(grens, m, b){
 
 /* Klein keuzemenu — voor de foto en voor lang indrukken op een recept */
 let menuData = null;
+/* op de donkere rand tikken sluit de pop-up */
+['menu','care','warn'].forEach(id=>{
+  const laag = document.getElementById(id);
+  if(laag) laag.addEventListener('click', e=>{
+    if(e.target !== laag) return;
+    if(id === 'menu') closeMenu();
+    else { laag.classList.remove('on'); if(id === 'care') careAsk = null; }
+  });
+});
+
 function openMenu(titel, items){
   menuData = {titel, items};
   $('menu').querySelector('.sheet-card').innerHTML = `
@@ -2257,7 +2289,7 @@ ${extra}` : ''}`;
   try{
     const inhoud = beelden.map(f => ({type:'image', source:{type:'base64', media_type:f.mt, data:f.data}}));
     inhoud.push({type:'text', text: importPrompt(bron, staart)});
-    let r = JSON.parse(extractJson(await aiRequest({model:AI_MODEL, max_tokens:4000, messages:[{role:'user', content:inhoud}]})));
+    let r = leesRecept(await aiRequest({model:AI_MODEL, max_tokens:8000, messages:[{role:'user', content:inhoud}]}));
     if(Array.isArray(r)) r = r[0];
     if(impTitel && r) r.name = impTitel;
     if(!showCandidates(r)) throw new Error('Ik kon er geen recept uit halen. Probeer een scherpere foto, of typ het over in het vak eronder.');
@@ -2295,11 +2327,10 @@ Recept:
 ${raw}
 `);
   try{
-    const req = {model:AI_MODEL, max_tokens:4000, messages:[{role:'user',content:prompt}]};
+    const req = {model:AI_MODEL, max_tokens:8000, messages:[{role:'user',content:prompt}]};
     if(isLink || aiOn('search')) req.tools = [{type:'web_search_20260209', name:'web_search', max_uses:3}];
     const txt = await aiRequest(req);
-    let r = JSON.parse(extractJson(txt));
-    if(Array.isArray(r)) r = r[0];
+    let r = leesRecept(txt);
     if(impTitel && r) r.name = impTitel;
     if(!showCandidates(r)) throw new Error('Ik kon er geen recept uit halen. Plak anders de hele tekst van het recept.');
   }catch(e){ importFout(e); }
@@ -2505,10 +2536,12 @@ Bedenk precies ${count} ${count===1?'recept':'verschillende recepten'} waaruit i
 Antwoord met UITSLUITEND geldige JSON, geen markdown: een array van ${count} ${count===1?'recept':'recepten'}:
 [{"name":"","type":"${opts.meal}","mins":25,"serves":${serves},"level":"${lvl||'easy'}","ingredients":["..."],"steps":["..."]${extraFields}}]`;
   try{
-    const req = {model:AI_MODEL, max_tokens:Math.min(8000, 1600*count + 1200), messages:[{role:'user',content:prompt}]};
+    const req = {model:AI_MODEL, max_tokens:Math.min(16000, 2600*count + 2000), messages:[{role:'user',content:prompt}]};
     if(aiOn('search')) req.tools = [{type:'web_search_20260209', name:'web_search', max_uses:3}];
     const txt = await aiRequest(req);
-    let arr = JSON.parse(extractJson(txt));
+    let arr;
+    try{ arr = JSON.parse(extractJson(txt)); }
+    catch(e){ throw new Error('De AI stopte halverwege het antwoord. Vraag om minder recepten tegelijk, of zet bij Voorkeuren "Recepten opzoeken" of "Tips" even uit.'); }
     if(!Array.isArray(arr)) arr = [arr];
     suggestions = arr.slice(0,count).map(r=>({ ...r, id:'c'+uid() }));
     picked = new Set(suggestions.map(x=>x.id));   /* standaard alles bewaren */
@@ -3163,9 +3196,17 @@ function veegTerug(){
   if(S.tab !== 'home'){ go('home'); return true; }
   return false;
 }
-/* niet vegen midden in een schuifbalk of een tekstveld */
+/* Een tik op een veld of knop gaat vaak met een beetje duimbeweging. Dat mag
+   nooit als terugveeg tellen — anders spring je weg terwijl je iets invult. */
 function veegMag(el){
-  return !(el && el.closest && el.closest('input[type=range], textarea, select, .imp-fotos, .chips'));
+  if(!el || !el.closest) return true;
+  if(el.closest('input, textarea, select')) return false;
+  /* in een openstaande pop-up mag je overal wegvegen; die is toch tijdelijk */
+  if(el.closest('.sheet.on')) return true;
+  if(el.closest('button, a, label, [contenteditable], .chip, .tickbox, .imp-fotos, .chips')) return false;
+  const a = document.activeElement;
+  if(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return false;
+  return true;
 }
 
 document.addEventListener('pointerdown', e=>{
@@ -3196,7 +3237,8 @@ document.addEventListener('pointerup', e=>{
   const dx = e.clientX - raak.x, dy = e.clientY - raak.y, tijd = Date.now() - raak.t;
   const r = raak; raak = null;
   if(!r.veeg) return;
-  if(dx > 70 && Math.abs(dy) < 45 && tijd < 700){
+  /* echt zijwaarts bedoeld: ruim naar rechts en veel meer horizontaal dan verticaal */
+  if(dx > 90 && Math.abs(dy) < 45 && Math.abs(dx) > Math.abs(dy) * 2.5 && tijd < 700){
     if(veegTerug()) slikKlik = true;
   }
 }, {passive:true});
