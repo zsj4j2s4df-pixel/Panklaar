@@ -336,7 +336,7 @@
 const KEY = 'panklaar:v1';
 /* Wordt bij het uitrollen gelijkgezet met de cache van de service worker,
    zodat je in de app kunt zien welke versie je telefoon vasthoudt. */
-const APP_VERSIE = 'v27';
+const APP_VERSIE = 'v28';
 let mem = null;
 
 /* IndexedDB als primaire opslag (standalone site); valt terug op de
@@ -1580,6 +1580,15 @@ function viewProfile(){
       ${[['auto','Auto'],['light','Daglicht'],['dark','Schoolbord']].map(([v,l])=>
         `<button class="chip ${S.theme===v?'on':''}" data-theme="${v}">${l}</button>`).join('')}
     </div>
+    ${opslagOk ? '' : `
+    <div class="eyebrow"><span>Opslag werkt niet</span></div>
+    <div class="sketch card" style="margin-bottom:20px">
+      <div style="font-size:17px;line-height:1.45">
+        Deze telefoon of browser bewaart niets van Panklaar. Alles wat je nu invult is weg zodra je de app sluit.
+        Dat komt meestal door een privévenster, of doordat de opslag vol zit. Open Panklaar in een gewoon venster,
+        of maak ruimte vrij, en probeer het opnieuw.
+      </div>
+    </div>` }
     <div class="eyebrow"><span>Versie</span></div>
     <div class="sketch card" style="margin-bottom:10px">
       <div class="row">
@@ -2858,7 +2867,17 @@ function beep(){
 
 /* ---------------- actions ---------------- */
 function pack(){ return {recipes:S.recipes, shopping:S.shopping, pantry:S.pantry, plan:S.plan, theme:S.theme, family:S.family, equip:S.equip, prefs:S.prefs, timers:S.timers}; }
-async function persist(){ await saveData(pack()); }
+let opslagOk = true;
+async function persist(){
+  const ok = await saveData(pack());
+  /* lukt bewaren niet (privémodus, opslag vol), dan moet je dat weten —
+     anders lijkt alles te werken tot je de app afsluit */
+  if(ok !== opslagOk){
+    opslagOk = ok;
+    if(!ok) toast('Let op: deze telefoon bewaart niets — zie Jij');
+    render();
+  }
+}
 
 function addToList(items, from){
   items.forEach(t=>{
