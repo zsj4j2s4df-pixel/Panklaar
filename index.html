@@ -3463,6 +3463,23 @@ document.addEventListener('pointercancel', ()=>{
   raak = null;
 }, {passive:true});
 
+/* Losse functies (in plaats van alles inline in de change-listener) zodat
+   we ze straks ook kunnen aanroepen vanuit het vangnet hieronder, voor als
+   iOS na de fotokiezer geen 'change' stuurt maar het bestand wel op het
+   veld heeft gezet. */
+async function verwerkPanPhotoInput(f){ if(f) await scanPantry(f); }
+async function verwerkBackupInput(f){ if(f) await backupInlezen(f); }
+async function verwerkImpFileInput(f){ if(f) await loadRecipeFile(f); }
+async function verwerkRecFotoInput(f){
+  if(!f || !fotoVoor) return;
+  const r = S.recipes.find(x=>x.id===fotoVoor);
+  try{
+    const foto = await bestandNaarFoto(f);
+    if(r){ r.foto = foto; await persist(); render(); toast('Foto toegevoegd'); }
+  }catch(err){ toast(err.message || 'Deze foto kon ik niet lezen'); }
+}
+async function verwerkImpFotoInput(lijst){ if(lijst && lijst.length) await voegFotosToe(lijst); }
+
 document.addEventListener('change', async e=>{
   if(e.target.dataset.day !== undefined){
     const d = e.target.dataset.day;
@@ -3470,23 +3487,41 @@ document.addEventListener('change', async e=>{
     await persist(); render();
   }
   if(e.target.dataset.slider){ S.prefs[e.target.dataset.slider] = +e.target.value; await persist(); }
-  if(e.target.id === 'pan-photo-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; if(f) scanPantry(f); }
-  if(e.target.id === 'backup-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; if(f) backupInlezen(f); }
-  if(e.target.id === 'imp-file'){ const f = e.target.files && e.target.files[0]; e.target.value=''; if(f) loadRecipeFile(f); }
-  if(e.target.id === 'rec-foto-input'){
-    const f = e.target.files && e.target.files[0]; e.target.value = '';
-    if(f && fotoVoor){
-      const r = S.recipes.find(x=>x.id===fotoVoor);
-      try{
-        const foto = await bestandNaarFoto(f);
-        if(r){ r.foto = foto; await persist(); render(); toast('Foto toegevoegd'); }
-      }catch(err){ toast(err.message || 'Deze foto kon ik niet lezen'); }
-    }
-  }
-  if(e.target.id === 'imp-foto'){ const fs = e.target.files; const lijst = fs ? [].slice.call(fs) : []; e.target.value=''; if(lijst.length) voegFotosToe(lijst); }
+  if(e.target.id === 'pan-photo-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; await verwerkPanPhotoInput(f); }
+  if(e.target.id === 'backup-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; await verwerkBackupInput(f); }
+  if(e.target.id === 'imp-file'){ const f = e.target.files && e.target.files[0]; e.target.value=''; await verwerkImpFileInput(f); }
+  if(e.target.id === 'rec-foto-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; await verwerkRecFotoInput(f); }
+  if(e.target.id === 'imp-foto'){ const fs = e.target.files; const lijst = fs ? [].slice.call(fs) : []; e.target.value=''; await verwerkImpFotoInput(lijst); }
   /* sleutel ook bewaren als je het veld verlaat zonder op ✓ te drukken */
   if(e.target.id === 'ai-key'){ saveAiKey(e.target.value); }
 });
+
+/* VANGNET voor een bekende eigenaardigheid op iOS (vooral als 'thuisschermapp'):
+   soms komt de fotokiezer terug zonder dat het 'change'-event van het
+   verborgen bestandsveld afgaat — de foto staat dan wél op het veld
+   (input.files), alleen hoort de app er niets van en blijft het scherm
+   ogenschijnlijk "niets doen". Daarom controleren we, elke keer dat de app
+   weer in beeld komt, gewoon zelf of er ergens een bestand klaarstaat dat
+   nog niet verwerkt is — ongeacht of het change-event wel of niet kwam. */
+async function vangGemisteBestanden(){
+  const velden = [
+    ['pan-photo-input', els => verwerkPanPhotoInput(els[0])],
+    ['backup-input',    els => verwerkBackupInput(els[0])],
+    ['imp-file',        els => verwerkImpFileInput(els[0])],
+    ['rec-foto-input',  els => verwerkRecFotoInput(els[0])],
+    ['imp-foto',        els => verwerkImpFotoInput(els)]
+  ];
+  for(const [id, doe] of velden){
+    const el = document.getElementById(id);
+    if(el && el.files && el.files.length){
+      /* eerst het bestand zelf vasthouden — pas dan het veld leegmaken,
+         anders ben je 'm net kwijt voordat je 'm gebruikt */
+      const bestanden = [].slice.call(el.files);
+      el.value = '';
+      try{ await doe(bestanden); }catch(e){}
+    }
+  }
+}
 document.addEventListener('input', e=>{
   const sl = e.target.closest && e.target.closest('[data-slider]');
   if(sl){ const k = sl.dataset.slider; S.prefs[k] = +sl.value; const v = document.getElementById('val-'+k); if(v) v.textContent = sl.value+'×'; }
@@ -3518,8 +3553,9 @@ document.addEventListener('input', e=>{
   }catch(e){}
   render();
   catchUpTimers();
-  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) catchUpTimers(); });
-  window.addEventListener('focus', catchUpTimers);
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ catchUpTimers(); vangGemisteBestanden(); } });
+  window.addEventListener('focus', ()=>{ catchUpTimers(); vangGemisteBestanden(); });
+  window.addEventListener('pageshow', vangGemisteBestanden);
 })();
 </script>
 <script>
