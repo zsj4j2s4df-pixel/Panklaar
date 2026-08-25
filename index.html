@@ -2368,7 +2368,8 @@ function showCandidates(list){
       steps: (r.steps||[]).map(String),
       ...(Array.isArray(r.tips) && r.tips.length ? {tips:r.tips.map(tipObj)} : {}),
       ...(r.uitleg ? {uitleg:String(r.uitleg)} : {}),
-      ...(Array.isArray(r.letop) && r.letop.length ? {letop:r.letop.map(String)} : {})
+      ...(Array.isArray(r.letop) && r.letop.length ? {letop:r.letop.map(String)} : {}),
+      ...(r.foto ? {foto:String(r.foto)} : {})
     }));
   if(!clean.length) return false;
   suggestions = clean;
@@ -2484,6 +2485,10 @@ ${extra}` : ''}`;
     let r = leesRecept(await aiRequest({model:AI_MODEL, max_tokens:8000, messages:[{role:'user', content:inhoud}]}));
     if(Array.isArray(r)) r = r[0];
     if(impTitel && r) r.name = impTitel;
+    /* de foto waarmee je 'm inlaadt wordt ook meteen het plaatje van het
+       recept — anders schrijft de AI het recept keurig over, maar staat
+       er straks nergens meer een foto bij. */
+    if(r) r.foto = `data:${beelden[0].mt};base64,${beelden[0].data}`;
     if(!showCandidates(r)) throw new Error('Ik kon er geen recept uit halen. Probeer een scherpere foto, of typ het over in het vak eronder.');
     impFotos = [];
   }catch(e){ importFout(e); }
@@ -2655,6 +2660,9 @@ function viewCandidate(id){
     </div>
     <h1 class="title hand" style="font-size:34px;margin-top:6px">${esc(c.name)}</h1>
     <p class="subtitle">${typeOf(c.type).label} · idee — nog niet bewaard</p>
+    ${c.foto ? `<div class="sketch card" style="padding:0;overflow:hidden;margin-bottom:14px">
+      <img src="${c.foto}" alt="Foto van ${esc(c.name)}" style="display:block;width:100%;max-height:220px;object-fit:cover">
+    </div>` : ''}
     <div class="sketch card" style="background:var(${typeOf(c.type).v})">
       <div class="stat-grid">
         <div class="stat"><div class="k">Tijd</div><div class="v hand">${c.mins}′</div></div>
@@ -2693,6 +2701,7 @@ function saveCandidate(id){
   if(Array.isArray(c.tips) && c.tips.length) rec.tips = c.tips.map(tipObj);
   if(c.uitleg) rec.uitleg = String(c.uitleg);
   if(Array.isArray(c.letop) && c.letop.length) rec.letop = c.letop.map(String);
+  if(c.foto) rec.foto = String(c.foto);
   S.recipes.push(rec);
   return rec;
 }
@@ -3429,7 +3438,14 @@ document.addEventListener('pointerdown', e=>{
   if(e.pointerType === 'mouse' && e.button !== 0) return;
   /* een vorige veeg zonder klik erna mag de volgende tik niet opeten */
   slikKlik = false;
-  raak = {x:e.clientX, y:e.clientY, t:Date.now(), veeg:veegMag(e.target)};
+  /* Terugvegen mag alleen tellen als je 'm start vlak bij de linkerrand
+     (net als de systeem-terugveeg van iOS zelf). Eerst gold dit voor het
+     hele scherm: een gewone tik op een brede kaart, met een klein beetje
+     duimbeweging tijdens het loslaten, werd dan per ongeluk gezien als
+     "terugvegen" en de app sprong dan stil terug naar Start — precies
+     wat het leek alsof knoppen niet reageerden. */
+  const bijRand = e.clientX <= 24;
+  raak = {x:e.clientX, y:e.clientY, t:Date.now(), veeg: bijRand && veegMag(e.target)};
   const kaart = e.target.closest && e.target.closest('[data-open]');
   if(kaart){
     drukKlok = setTimeout(()=>{
