@@ -1,6 +1,6 @@
 /* Panklaar service worker — offline app-shell.
    Verhoog CACHE bij een nieuwe versie, anders houden telefoons de oude. */
-const CACHE = 'panklaar-v34';
+const CACHE = 'panklaar-v35';
 const ASSETS = [
   './',
   './index.html',
@@ -10,7 +10,11 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', e=>{
-  e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)).then(()=>self.skipWaiting()));
+  e.waitUntil(
+    caches.open(CACHE)
+      .then(c=>Promise.all(ASSETS.map(u=>fetch(u,{cache:'no-store'}).then(r=>c.put(u,r)))))
+      .then(()=>self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', e=>{
@@ -26,7 +30,7 @@ self.addEventListener('fetch', e=>{
   if(url.origin !== location.origin) return;
   // App-shell: eerst cache, anders netwerk; index.html netwerk-eerst voor updates.
   if(e.request.mode === 'navigate'){
-    e.respondWith(fetch(e.request).catch(()=>caches.match('./index.html')));
+    e.respondWith(fetch(e.request, {cache:'no-store'}).catch(()=>caches.match('./index.html')));
     return;
   }
   e.respondWith(caches.match(e.request).then(r=> r || fetch(e.request)));

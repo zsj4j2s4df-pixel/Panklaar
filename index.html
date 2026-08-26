@@ -356,7 +356,7 @@
 const KEY = 'panklaar:v1';
 /* Wordt bij het uitrollen gelijkgezet met de cache van de service worker,
    zodat je in de app kunt zien welke versie je telefoon vasthoudt. */
-const APP_VERSIE = 'v34';
+const APP_VERSIE = 'v35';
 let mem = null;
 
 /* IndexedDB als primaire opslag (standalone site); valt terug op de
@@ -3585,7 +3585,13 @@ if('serviceWorker' in navigator){
     window.__herladen = true; location.reload();
   });
   window.addEventListener('load', ()=>{
-    navigator.serviceWorker.register('service-worker.js')
+    /* updateViaCache:'none' dwingt de browser om service-worker.js zelf
+       ook nooit uit de gewone HTTP-cache te lezen bij een update-check.
+       Zonder dit kan een telefoon (vooral als thuisschermapp) het
+       bestand als "ongewijzigd" blijven zien terwijl er allang een
+       nieuwe versie op GitHub staat — en dan verandert er dus nooit
+       iets, hoe vaak we CACHE ook ophogen. */
+    navigator.serviceWorker.register('service-worker.js', {updateViaCache:'none'})
       .then(reg=>{ try{ reg.update(); }catch(e){} })
       .catch(()=>{});
   });
