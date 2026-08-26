@@ -356,7 +356,7 @@
 const KEY = 'panklaar:v1';
 /* Wordt bij het uitrollen gelijkgezet met de cache van de service worker,
    zodat je in de app kunt zien welke versie je telefoon vasthoudt. */
-const APP_VERSIE = 'v35';
+const APP_VERSIE = 'v36';
 let mem = null;
 
 /* IndexedDB als primaire opslag (standalone site); valt terug op de
@@ -3527,6 +3527,7 @@ async function vangGemisteBestanden(){
     ['rec-foto-input',  els => verwerkRecFotoInput(els[0])],
     ['imp-foto',        els => verwerkImpFotoInput(els)]
   ];
+  let iets = false;
   for(const [id, doe] of velden){
     const el = document.getElementById(id);
     if(el && el.files && el.files.length){
@@ -3534,10 +3535,37 @@ async function vangGemisteBestanden(){
          anders ben je 'm net kwijt voordat je 'm gebruikt */
       const bestanden = [].slice.call(el.files);
       el.value = '';
+      iets = true;
       try{ await doe(bestanden); }catch(e){}
     }
   }
+  return iets;
 }
+
+/* De app komt soms al in beeld vóórdat iOS de gekozen/gemaakte foto echt
+   aan het bestandsveld heeft doorgegeven (een fotokiezer of de Camera-app
+   sluit iets eerder dan de foto zelf klaarstaat). Eén controle direct bij
+   het terugkomen is dan te vroeg. Daarom blijven we, telkens als de app
+   weer in beeld komt, een paar seconden lang om de 300ms checken — zodra
+   er iets gevonden is stoppen we meteen. */
+let vangnetBezig = false;
+function planVangnet(){
+  if(vangnetBezig) return;
+  vangnetBezig = true;
+  let pogingen = 0;
+  const klok = setInterval(async ()=>{
+    pogingen++;
+    const gevonden = await vangGemisteBestanden();
+    if(gevonden || pogingen >= 12){ clearInterval(klok); vangnetBezig = false; }
+  }, 300);
+}
+/* Vangnet nummer twee, onafhankelijk van visibilitychange/focus/pageshow:
+   als thuisschermapp vuurt iOS die events niet altijd betrouwbaar af rond
+   de Camera-app, dus vertrouwen we daar niet blind op. Dit tikkertje loopt
+   gewoon de hele tijd op de achtergrond mee (elke seconde een paar bytes
+   checken op 5 velden kost niets) en pikt een foto dus sowieso op, wat er
+   verder ook wel of niet aan events afgaat. */
+setInterval(vangGemisteBestanden, 1000);
 document.addEventListener('input', e=>{
   const sl = e.target.closest && e.target.closest('[data-slider]');
   if(sl){ const k = sl.dataset.slider; S.prefs[k] = +sl.value; const v = document.getElementById('val-'+k); if(v) v.textContent = sl.value+'×'; }
@@ -3569,9 +3597,9 @@ document.addEventListener('input', e=>{
   }catch(e){}
   render();
   catchUpTimers();
-  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ catchUpTimers(); vangGemisteBestanden(); } });
-  window.addEventListener('focus', ()=>{ catchUpTimers(); vangGemisteBestanden(); });
-  window.addEventListener('pageshow', vangGemisteBestanden);
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ catchUpTimers(); planVangnet(); } });
+  window.addEventListener('focus', ()=>{ catchUpTimers(); planVangnet(); });
+  window.addEventListener('pageshow', planVangnet);
 })();
 </script>
 <script>
