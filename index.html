@@ -182,12 +182,15 @@
   .bestandveld{position:absolute;top:0;left:0;width:1px;height:1px;opacity:0;
     border:0;padding:0;pointer-events:none;}
   .imp-fotos{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px;}
-  .imp-foto{position:relative;}
-  .imp-foto img{width:88px;height:110px;object-fit:cover;border:2px solid var(--ink);
-    filter:url(#wobble);border-radius:12px;background:var(--card);}
+  .imp-foto{position:relative;width:92px;height:114px;padding:2px;}
+  .imp-foto img{width:88px;height:110px;object-fit:cover;display:block;max-width:none;
+    border:2px solid var(--ink);filter:none !important;border-radius:10px;background:var(--card);
+    -webkit-transform:translateZ(0);transform:translateZ(0);}
+  .imp-foto::before{content:'';position:absolute;inset:0;pointer-events:none;
+    border:1.5px solid var(--ink);border-radius:13px;transform:rotate(-1deg);opacity:.9;}
   .imp-foto-x{position:absolute;top:-8px;right:-8px;width:26px;height:26px;border-radius:50%;
     border:2px solid var(--ink);background:var(--paper);color:var(--ink);font-size:17px;line-height:1;
-    cursor:pointer;font-family:inherit;filter:url(#wobble);}
+    cursor:pointer;font-family:inherit;filter:url(#wobble);z-index:2;}
   .divider{margin:2px 0 10px;line-height:0;}
   .divider svg{width:100%;height:10px;fill:none;stroke:var(--line);stroke-width:1.4;
     stroke-linecap:round;filter:url(#wobble-rough);}
@@ -2310,7 +2313,7 @@ function viewImport(){
     </div>
     ${impFotos.length ? `<div class="imp-fotos">
       ${impFotos.map((f,i)=>`<div class="imp-foto">
-        <img src="data:${f.mt};base64,${f.data}" alt="foto ${i+1}">
+        <img src="data:${f.mt};base64,${f.data}" alt="foto ${i+1}" decoding="async" loading="eager">
         <button class="imp-foto-x" data-fotorm="${i}" aria-label="Foto weghalen">×</button>
       </div>`).join('')}
     </div>` : ''}
@@ -2455,7 +2458,8 @@ async function voegFotosToe(files){
   for(const f of lijst.slice(0, ruimte)){
     try{
       const b = await fileToB64(f);
-      impFotos.push({mt:b.media_type, data:b.data});
+      if(!b || !b.data) throw new Error('Deze foto kwam leeg binnen.');
+      impFotos.push({mt:'image/jpeg', data:b.data});
     }catch(e){ fout = e.message || 'Deze foto kon ik niet lezen.'; }
   }
   render();
