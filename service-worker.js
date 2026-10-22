@@ -1,37 +1,21 @@
-/* Panklaar service worker — offline app-shell.
-   Verhoog CACHE bij een nieuwe versie, anders houden telefoons de oude. */
-const CACHE = 'panklaar-v36';
-const ASSETS = [
-  './',
-  './index.html',
-  './manifest.json',
-  './icon-192.png',
-  './icon-512.png'
-];
-
-self.addEventListener('install', e=>{
-  e.waitUntil(
-    caches.open(CACHE)
-      .then(c=>Promise.all(ASSETS.map(u=>fetch(u,{cache:'no-store'}).then(r=>c.put(u,r)))))
-      .then(()=>self.skipWaiting())
-  );
-});
-
-self.addEventListener('activate', e=>{
-  e.waitUntil(
-    caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))
-      .then(()=>self.clients.claim())
-  );
-});
-
-self.addEventListener('fetch', e=>{
-  const url = new URL(e.request.url);
-  // Externe calls (bv. de Anthropic API) nooit onderscheppen of cachen.
-  if(url.origin !== location.origin) return;
-  // App-shell: eerst cache, anders netwerk; index.html netwerk-eerst voor updates.
-  if(e.request.mode === 'navigate'){
-    e.respondWith(fetch(e.request, {cache:'no-store'}).catch(()=>caches.match('./index.html')));
-    return;
-  }
-  e.respondWith(caches.match(e.request).then(r=> r || fetch(e.request)));
+'use strict';
+const CACHE='panklaar-v38';
+const ASSETS=['./','./index.html','./security.js','./app.js','./pwa.js','./manifest.json','./icon-192.png','./icon-512.png'];
+self.addEventListener('install',event=>event.waitUntil((async()=>{
+ const cache=await caches.open(CACHE);
+ await Promise.all(ASSETS.map(async path=>{const response=await fetch(path,{cache:'no-store'});if(!response.ok)throw new Error('Appbestand ontbreekt');await cache.put(path,response);}));
+ await self.skipWaiting();
+})()));
+self.addEventListener('activate',event=>event.waitUntil((async()=>{
+ const keys=await caches.keys();await Promise.all(keys.filter(k=>k.startsWith('panklaar-')&&k!==CACHE).map(k=>caches.delete(k)));await self.clients.claim();
+})()));
+self.addEventListener('fetch',event=>{
+ const url=new URL(event.request.url);
+ if(event.request.method!=='GET'||url.origin!==self.location.origin)return;
+ const base=new URL('./',self.location.href);
+ if(event.request.mode==='navigate'){
+  event.respondWith(fetch(event.request,{cache:'no-store'}).catch(async()=>await caches.match(new URL('index.html',base).href)||Response.error()));return;
+ }
+ if(!ASSETS.some(path=>new URL(path,base).pathname===url.pathname))return;
+ event.respondWith(caches.open(CACHE).then(async cache=>await cache.match(event.request,{ignoreSearch:true})||fetch(event.request)));
 });

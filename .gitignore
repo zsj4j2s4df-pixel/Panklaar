@@ -1,1 +1,8 @@
-.claude/review/
+dist/
+node_modules/
+test-results/
+playwright-report/
+.wrangler/
+.env
+.env.*
+*.backup.json
