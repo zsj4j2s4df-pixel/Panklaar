@@ -1,6 +1,6 @@
 'use strict';
-const CACHE='panklaar-v41';
-const ASSETS=['./','./index.html','./security.js','./app.js','./pwa.js','./manifest.json','./icon-192.png','./icon-512.png'];
+const CACHE='panklaar-v42';
+const ASSETS=['./','./index.html','./login.js','./security.js','./app.js','./pwa.js','./manifest.json','./icon-192.png','./icon-512.png'];
 self.addEventListener('install',event=>event.waitUntil((async()=>{
  const cache=await caches.open(CACHE);
  await Promise.all(ASSETS.map(async path=>{const response=await fetch(path,{cache:'no-store'});if(!response.ok)throw new Error('Appbestand ontbreekt');await cache.put(path,response);}));

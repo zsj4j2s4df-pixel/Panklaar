@@ -247,3 +247,20 @@ toe en bak 3 minuten` geeft **ui en knoflook**. Bij `Laat 5 minuten bakken`
 zoekt de app de laatste toevoeging in deze of de voorgaande kookstap. Ingrediënten
 uit latere handelingen worden niet meegenomen. Ook boter kan zelf het onderwerp
 zijn, bijvoorbeeld bij smelten; het onderwerp blijft vóór starten aanpasbaar.
+
+### Lokaal inloggen v42
+
+Een scherm met het Panklaar-icoon, gebruikersnaam, wachtwoord en ‘Ingelogd blijven’.
+Voor bestaande gegevens kies je eenmalig een gebruikersnaam met je bestaande
+wachtwoord. De gebruikersnaam wordt versleuteld in IndexedDB met de bestaande
+gegevenssleutel; gebruikersnamen zijn niet hoofdlettergevoelig. Het wachtwoord
+wordt niet bewaard. Back-ups gebruiken nog steeds alleen hun back-upwachtwoord.
+Er is geen serveraccount of automatische synchronisatie tussen apparaten.
+
+De bestaande optie voor 30 dagen onthouden blijft optioneel. Vergrendelen trekt
+deze toegang in. Een oud onthouden apparaat vraagt bij de eerste upgrade nogmaals
+je wachtwoord om de gebruikersnaam veilig in te stellen. De AI-sleutel blijft
+alleen beschikbaar in de huidige sessie. De offline cache bevat ook het inlogscript.
+
+Extra controles voor beide mobiele browsermotoren: het icoon en schermbreedte,
+onjuiste inloggegevens, bestaande gegevens behouden en onthouden toegang intrekken.
