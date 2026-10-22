@@ -6,7 +6,7 @@
 const KEY = 'panklaar:v1';
 /* Wordt bij het uitrollen gelijkgezet met de cache van de service worker,
    zodat je in de app kunt zien welke versie je telefoon vasthoudt. */
-const APP_VERSIE = 'v39';
+const APP_VERSIE = 'v40';
 let mem = null;
 let restoring=false;
 
@@ -779,9 +779,11 @@ function toast(msg){
   clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('on'), 2400);
 }
 
+let editDraft=null;
 let viewServes = null;    /* tijdelijk aangepast aantal personen op het receptdetail */
 let confirmWipe = false;  /* tweede tik nodig voor 'lijst leegmaken' */
 function go(tab, view=null, arg=null){
+  editDraft=view==='edit'?structuredClone(S.recipes.find(r=>r.id===arg)||{name:'',type:'dinner',mins:30,serves:2,level:'easy',ingredients:[],steps:[]}):null;
   viewServes = null; confirmWipe = false;
   S.tab = tab; S.view = view; S.arg = arg;
   render(); $('screen').scrollTop = 0;
@@ -810,7 +812,7 @@ function render(){
 function typeOf(id){ return TYPES.find(t=>t.id===id) || TYPES.find(t=>t.id==='dinner'); }
 
 function recipeCard(r){
-  return `<div class="sketch card" data-open="${r.id}" style="background:var(${typeOf(r.type).v})">
+  return `<button type="button" class="sketch card recipe-card" data-open="${r.id}" style="background:var(${typeOf(r.type).v})">
     <div class="row">
       <div class="grow">
         <div class="name hand">${esc(r.name)}</div>
@@ -818,7 +820,7 @@ function recipeCard(r){
       </div>
       <span class="tag">${typeOf(r.type).label}</span>
     </div>
-  </div>`;
+  </button>`;
 }
 
 function viewHome(){
@@ -950,7 +952,7 @@ function viewDetail(id){
 
 function viewEdit(id){
   const r = id ? S.recipes.find(x=>x.id===id) : null;
-  const d = r || {name:'',type:'dinner',mins:30,serves:2,level:'easy',ingredients:[],steps:[]};
+  const d = editDraft || r || {name:'',type:'dinner',mins:30,serves:2,level:'easy',ingredients:[],steps:[]};
   const tipsTxt = (d.tips||[]).map(t=>tipObj(t).text).join('\n');
   return `
     <div class="detail-top">
@@ -994,13 +996,14 @@ function viewEdit(id){
       <label for="f-uitleg">Waarom zo? (optioneel)</label>
       <textarea class="inp" id="f-uitleg" rows="3" placeholder="Waarom je het op deze manier doet.">${esc(d.uitleg||'')}</textarea>
     </div>
-    ${r ? `<div class="field">
+    <div class="field">
       <label>Foto</label>
+      <div id="edit-photo-preview">${d.foto?`<img class="recipe-photo-preview" src="${esc(d.foto)}" alt="Voorbeeld van de gekozen receptfoto">`:'<p class="muted">Nog geen foto gekozen.</p>'}</div>
       <div class="split">
         <button class="btn" id="f-foto" style="flex:1">${ic('camera','')} ${d.foto ? 'Foto vervangen' : 'Foto toevoegen'}</button>
-        ${d.foto ? `<button class="btn ghost" data-fotoweg="${r.id}" aria-label="Foto weghalen">${ic('trash','')}</button>` : ''}
+        ${d.foto ? `<button class="btn ghost" data-fotoweg="${r?r.id:"new"}" aria-label="Foto weghalen">${ic('trash','')}</button>` : ''}
       </div>
-    </div>` : ''}
+    </div>
     <button class="btn fill wide" data-save="${r ? r.id : 'new'}">${ic('check','')} Recept opslaan</button>
   `;
 }
@@ -1010,12 +1013,12 @@ function viewShopping(){
   return `
     <h1 class="title hand">Boodschappenlijst</h1>
     <p class="subtitle">${open.length} te halen</p>
-    <div class="sketch card" data-pantmenu="1" style="cursor:pointer;margin-bottom:14px">
+    <button type="button" class="sketch card menu-card" data-pantmenu="1" style="cursor:pointer;margin-bottom:14px">
       <div class="row">
         <div class="grow"><div class="name hand">Wat heb ik in huis</div><div class="meta">${S.pantry.length} in voorraad · voor 'Wat zullen we koken?'</div></div>
         <span class="fam-chev ${pantOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
       </div>
-    </div>
+    </button>
     ${pantOpen ? `
     <button class="btn wide" id="pan-photo-btn" style="margin-bottom:8px">${ic('camera','')} Foto maken</button>
     <input type="file" accept="image/*" id="pan-photo-input" class="bestandveld" aria-hidden="true" tabindex="-1">
@@ -1080,10 +1083,7 @@ function viewPlan(){
       return `<div class="sketch card" ${r?`style="background:var(${typeOf(r.type).v})"`:''}>
         <div class="row">
           <span class="hand" style="font-size:22px;width:52px">${d}</span>
-          <select class="inp grow" data-day="${d}" style="font-size:18px;padding:9px 12px">
-            <option value="">— nog niks —</option>
-            ${S.recipes.map(x=>`<option value="${x.id}" ${S.plan[d]===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}
-          </select>
+          <button type="button" class="inp grow plan-choice" data-plan-day="${d}" aria-haspopup="dialog" aria-label="${d}: ${esc(r?r.name:'kies een recept')}">${esc(r?r.name:'Kies een recept')} ▾</button>
         </div>
       </div>`;
     }).join('')}
@@ -1096,12 +1096,17 @@ function viewProfile(){
   return `
     <h1 class="title hand">Jouw keuken</h1>
     <p class="subtitle">Wat er in huis is, en hoe alles eruitziet.</p>
-    <div class="sketch card" data-help="1" style="cursor:pointer;margin-bottom:14px">
+    <div class="sketch card">
+      <label class="security-setting"><input id="remember-device" type="checkbox" ${PanklaarSecurity.isRemembered()?'checked':''}>Op dit apparaat ontgrendeld blijven (30 dagen)</label>
+      <p class="muted" style="font-size:14px;margin-top:8px">Gebruik dit alleen op je eigen apparaat. Andere gebruikers van deze browser kunnen dan ook je recepten en gezinsgegevens bekijken. Vergrendelen zet deze optie uit. Je AI-sleutel blijft alleen in deze sessie.</p>
+    </div>
+    ${location.hostname.endsWith('github.io')?'<p class="muted" style="margin-bottom:14px">Maak hier een back-up en zet die terug op <a href="https://panklaar.zsj4j2s4df.workers.dev/" rel="noopener noreferrer">het nieuwe Panklaar-adres</a>.</p>':''}
+    <button type="button" class="sketch card menu-card" data-help="1" style="cursor:pointer;margin-bottom:14px">
       <div class="row">
         <div class="grow"><div class="name hand">Uitleg</div><div class="meta">Hoe werkt Panklaar &amp; de AI-sleutel</div></div>
         <span class="fam-chev ${helpOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
       </div>
-    </div>
+    </button>
     ${helpOpen ? `
     <div class="sketch card">
       <div style="font-size:17px;line-height:1.5">
@@ -1151,7 +1156,7 @@ function viewProfile(){
       <div class="step"><span class="n">·</span><span class="tx">De kosten zijn klein: grofweg een paar cent per keer dat je recepten laat bedenken.</span></div>
       <div class="step"><span class="n">·</span><span class="tx">De voedingsregels bij gezinsleden volgen het Voedingscentrum, maar dit is geen medisch advies — overleg bij twijfel met je verloskundige, huisarts of het consultatiebureau.</span></div>
     </div>` : ''}
-    <div class="sketch card" data-fam="toggle" style="cursor:pointer;margin-bottom:14px">
+    <button type="button" class="sketch card menu-card" data-fam="toggle" style="cursor:pointer;margin-bottom:14px">
       <div class="row">
         <div class="grow">
           <div class="name hand">Gezinsleden</div>
@@ -1159,7 +1164,7 @@ function viewProfile(){
         </div>
         <span class="fam-chev ${famOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
       </div>
-    </div>
+    </button>
     ${famOpen ? `
     ${S.family.length ? S.family.map(familyCard).join('')
       : `<div class="sketch card"><div class="muted" style="font-size:17px">Nog geen gezinsleden. Voeg ze toe zodat recepten rekening houden met wie mee-eet.</div></div>`}
@@ -1167,12 +1172,12 @@ function viewProfile(){
     <div class="sketch soft card" style="margin-bottom:20px">
       <div class="muted" style="font-size:15px;line-height:1.45">Wie ‘eet mee’ aangevinkt heeft, telt mee bij <span class="hand">Wat kan ik koken?</span>. ${NUTRI_DISCLAIMER}</div>
     </div>` : ''}
-    <div class="sketch card" data-prefmenu="1" style="cursor:pointer;margin-bottom:14px">
+    <button type="button" class="sketch card menu-card" data-prefmenu="1" style="cursor:pointer;margin-bottom:14px">
       <div class="row">
         <div class="grow"><div class="name hand">Voorkeuren</div><div class="meta">Richtlijnen voor de AI</div></div>
         <span class="fam-chev ${prefOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
       </div>
-    </div>
+    </button>
     ${prefOpen ? `
     <div class="sketch card" style="margin-bottom:14px">
       <div class="pref-row"><span>Groenten</span><input type="range" min="0" max="7" value="${S.prefs.veg}" data-slider="veg"><span class="pref-val hand" id="val-veg">${S.prefs.veg}×</span></div>
@@ -1195,12 +1200,12 @@ function viewProfile(){
     <div class="chips" style="margin-bottom:20px">
       ${PREF_FLAGS.map(f=>`<button class="chip ${(S.prefs.flags||[]).includes(f.id)?'on':''}" data-prefflag="${f.id}">${f.label}</button>`).join('')}
     </div>` : ''}
-    <div class="sketch card" data-equipmenu="1" style="cursor:pointer;margin-bottom:14px">
+    <button type="button" class="sketch card menu-card" data-equipmenu="1" style="cursor:pointer;margin-bottom:14px">
       <div class="row">
         <div class="grow"><div class="name hand">Keukenapparatuur</div><div class="meta">${(S.equip||[]).length} geselecteerd · richtlijn voor de AI</div></div>
         <span class="fam-chev ${equipOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
       </div>
-    </div>
+    </button>
     ${equipOpen ? `
     <div class="chips" style="margin-bottom:20px">
       ${EQUIPMENT.map(e=>`<button class="chip ${(S.equip||[]).includes(e.id)?'on':''}" data-equip="${e.id}">${e.label}</button>`).join('')}
@@ -1414,12 +1419,12 @@ function viewMemberEdit(id){
 
 /* kop van een uitklapbaar vakje bij Jij */
 function vakKop(k, titel, onder){
-  return `<div class="sketch card" data-vak="${k}" style="cursor:pointer;margin-bottom:14px">
+  return `<button type="button" class="sketch card menu-card" data-vak="${k}" style="cursor:pointer;margin-bottom:14px">
     <div class="row">
       <div class="grow"><div class="name hand">${esc(titel)}</div><div class="meta">${esc(onder)}</div></div>
       <span class="fam-chev ${vak(k)?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
     </div>
-  </div>`;
+  </button>`;
 }
 
 /* Wat de AI deze maand heeft gekost, en hoeveel er nog over is */
@@ -1722,6 +1727,7 @@ function openMenu(titel, items){
       <svg class="ic" viewBox="0 0 24 24">${I[it.icon] || I.chev}</svg>
       <span>${esc(it.label)}</span>
     </button>`).join('')}`;
+  $('menu').setAttribute('role','dialog');$('menu').setAttribute('aria-modal','true');$('menu').setAttribute('aria-label',titel);
   $('menu').classList.add('on');
 }
 function closeMenu(){ $('menu').classList.remove('on'); menuData = null; }
@@ -1864,7 +1870,7 @@ function beeldNaarJpeg(beeld, max, kwal){
   if(beeld.close) try{ beeld.close(); }catch(e){}
   /* een leeg vel (te weinig geheugen) is klein; een echt klein plaatje ook,
      dus alleen klagen als het origineel wél groot was */
-  if(uit.length < 3000 && bw * bh > 40000) throw new Error('Deze foto kwam leeg binnen. Probeer een andere foto.');
+  if(!uit.startsWith('data:image/jpeg;base64,'))throw new Error('Deze foto kon niet worden omgezet. Probeer een andere foto.');
   return uit;
 }
 async function bestandNaarFoto(file, max){
@@ -2418,7 +2424,7 @@ function drawStep(){
   const m = s.match(/(\d+)\s*(min|minuten|minuut)/i);
   if(m && !S.timers.some(t=>t.stepIdx===cook.i && t.recipeId===cook.recipeId && !t.done)){
     const min = parseInt(m[1],10), label = timerLabel(s, cook.ings, m.index);
-    $('cookTimerAdd').innerHTML = `<button class="btn ghost cook-add-t" data-addtimer="${min}" data-tlabel="${esc(label)}">${ic('flame','')} Zet timer · ${min} min · ${esc(label)}</button>`;
+    $('cookTimerAdd').innerHTML = `<label for="cook-timer-label" class="muted" style="font-size:15px">Timer voor</label><input id="cook-timer-label" class="inp" maxlength="80" value="${esc(label)}" aria-label="Onderwerp van de timer" style="margin:4px 0 8px"><button class="btn ghost cook-add-t" data-addtimer="${min}" data-tlabel="${esc(label)}">${ic('flame','')} Zet timer · ${min} min · ${esc(label)}</button>`;
   } else {
     $('cookTimerAdd').innerHTML = '';
   }
@@ -2439,15 +2445,16 @@ const ING_SKIP = ['en','of','de','het','een','met','per','voor','naar','uit','to
 const isSide = n => wordsOf(n).some(w => SIDE_ING.some(x => ingSim(w, x)));
 
 /* elk ingrediënt dat in deze tekst genoemd wordt, op volgorde van noemen */
+const ingredientWord=w=>w==='uien'?'ui':w==='eieren'?'ei':/^(?:kip|kipfilets?|kipdij(?:en)?|kippenborst(?:en)?)$/.test(w)?'kip':w;
 function stepIngs(txt, list){
   const words = wordsOf(txt);
   const out = [];
   (list||[]).forEach(orig=>{
     const name = parseIng(String(orig)).name.replace(/\(.*?\)/g,' ');
-    const parts = wordsOf(name).filter(w=>w.length>=2 && !ING_SKIP.includes(w));
+    const parts = wordsOf(name).filter(w=>w.length>=2&&!ING_SKIP.includes(w)&&!ING_ADJ.includes(w)).map(ingredientWord);
     if(!parts.length) return;
     for(let i=0;i<words.length;i++){
-      const w = words[i];
+      const w = ingredientWord(words[i]);
       /* korte namen als 'ui' alleen precies; langere mogen buigen */
       const hit = parts.some(p => (p.length < 4 || w.length < 4) ? w === p : ingSim(w,p));
       if(hit){ out.push({text:String(orig), name, at:i}); break; }
@@ -2464,10 +2471,24 @@ function shortName(n){
   return (w[0] || 'timer').slice(0,16);
 }
 /* waar de timer voor is: liefst het ingrediënt dat het onderwerp is van de stap */
-function timerLabel(txt, list, at){
-  const hits = stepIngs(txt, list);
-  const main = hits.find(h=>!isSide(h.name)) || hits[0];
-  return main ? shortName(main.name) : labelFromStep(txt, at);
+function timerLabel(txt,list,at){
+  const source=String(txt);at=at??source.length;
+  const before=source.slice(0,at);
+  const breaks=[...before.matchAll(/[.;!?]\s+|\b(?:terwijl|ondertussen|daarna|vervolgens)\b/gi)];
+  const start=breaks.length?breaks.at(-1).index+breaks.at(-1)[0].length:0;
+  const following=source.slice(at).search(/[.;!?](?:\s|$)/);
+  const end=following<0?source.length:at+following;
+  const clause=source.slice(start,end);
+  const actions=[...before.slice(start).matchAll(/\b(?:bak|kook|rooster|fruit|stoom|gril|stoof|laat|verwarm|sudder|blancheer)\b/gi)];
+  const actionStart=actions.length?start+actions.at(-1).index:start;
+  const actionText=source.slice(actionStart,end);
+  const actionHits=stepIngs(actionText,list);
+  const hits=actionHits.length?actionHits:stepIngs(clause,list);
+  const main=hits.find(h=>!isSide(h.name))||hits[0];
+  if(main)return shortName(main.name);
+  if(/\boven\b/i.test(clause))return 'oven';
+  if(/\brust(?:en)?\b/i.test(clause))return 'rusten';
+  return labelFromStep(clause,at-start);
 }
 
 /* een woord uit de staptekst als klein label — werkwoorden en stopwoorden overslaan */
@@ -2685,10 +2706,11 @@ function applyTheme(){
 }
 
 document.addEventListener('click', async (e)=>{
-  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,#imp-foto-btn,[data-fotorm],[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research],#ai-budget-save,#ai-usage-reset,#warnClose,#warnOk,#warnGo,[data-dienst],#ai-model-save,[data-recfoto],[data-vak],#backup-maak,#backup-terug,#app-update,[data-veeg],#f-foto,[data-fotoweg],[data-menu],#menuClose');
+  const t = e.target.closest('[data-plan-day],[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,#imp-foto-btn,[data-fotorm],[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research],#ai-budget-save,#ai-usage-reset,#warnClose,#warnOk,#warnGo,[data-dienst],#ai-model-save,[data-recfoto],[data-vak],#backup-maak,#backup-terug,#app-update,[data-veeg],#f-foto,[data-fotoweg],[data-menu],#menuClose');
   if(!t) return;
   if(slikKlik){ slikKlik = false; return; }
 
+  if(t.dataset.planDay){openPlanDay(t.dataset.planDay);return;}
   if(t.dataset.tab){ go(t.dataset.tab); return; }
   if(t.dataset.open){ go('recipes','detail',t.dataset.open); maybeCare(t.dataset.open); return; }
   if(t.dataset.go === 'new'){ go('recipes','edit',null); return; }
@@ -2705,7 +2727,7 @@ document.addEventListener('click', async (e)=>{
   if(t.dataset.save){
     const name = $('f-name').value.trim();
     if(!name){ toast('Geef het recept eerst een naam'); return; }
-    const oud = S.recipes.find(r=>r.id===t.dataset.save) || {};
+    const oud = editDraft || S.recipes.find(r=>r.id===t.dataset.save) || {};
     const rec = {
       /* alles wat niet in het formulier staat (foto, let op, care) blijft staan */
       ...oud,
@@ -2819,11 +2841,9 @@ document.addEventListener('click', async (e)=>{
   if(t.id === 'imp-file-btn'){ $('imp-file').click(); return; }
   if(t.id === 'imp-foto-btn'){ leesImpVelden(); $('imp-foto').click(); return; }
   if(t.dataset.recfoto){ fotoMenu(t.dataset.recfoto); return; }
-  if(t.id === 'f-foto'){ fotoVoor = S.arg; $('rec-foto-input').click(); return; }
+  if(t.id === 'f-foto'){captureEditDraft();fotoVoor=S.arg||'new';$('rec-foto-input').click();return;}
   if(t.dataset.fotoweg){
-    const r = S.recipes.find(x=>x.id===t.dataset.fotoweg);
-    if(r){ delete r.foto; await persist(); render(); toast('Foto weg'); }
-    return;
+    captureEditDraft();if(editDraft){delete editDraft.foto;render();}return;
   }
   if(t.dataset.vak){ vakOpen[t.dataset.vak] = !vak(t.dataset.vak); render(); return; }
   if(t.id === 'backup-maak'){ await maakBackup(); return; }
@@ -3017,7 +3037,7 @@ document.addEventListener('click', async (e)=>{
     else { closeCook(); toast('Eet smakelijk'); }
     return;
   }
-  if(t.dataset.addtimer){ addStepTimer(+t.dataset.addtimer, t.dataset.tlabel, cook.i); drawStep(); return; }
+  if(t.dataset.addtimer){ addStepTimer(+t.dataset.addtimer, $('cook-timer-label')?.value.trim()||t.dataset.tlabel, cook.i); drawStep(); return; }
   if(t.dataset.ttoggle){ toggleTimerById(t.dataset.ttoggle); return; }
   if(t.dataset.tdismiss){ dismissTimer(t.dataset.tdismiss); return; }
 });
@@ -3116,16 +3136,21 @@ async function verwerkPanPhotoInput(f){ if(f) await scanPantry(f); }
 async function verwerkBackupInput(f){ if(f) await backupInlezen(f); }
 async function verwerkImpFileInput(f){ if(f) await loadRecipeFile(f); }
 async function verwerkRecFotoInput(f){
-  if(!f || !fotoVoor) return;
-  const r = S.recipes.find(x=>x.id===fotoVoor);
+  if(!f||!fotoVoor)return;
+  const target=fotoVoor,draft=S.view==='edit'&&(S.arg||'new')===target;
+  if(draft)captureEditDraft();
   try{
-    const foto = await bestandNaarFoto(f);
-    if(r){ r.foto = foto; await persist(); render(); toast('Foto toegevoegd'); }
-  }catch(err){ toast(err.message || 'Deze foto kon ik niet lezen'); }
+    const foto=await bestandNaarFoto(f);
+    if(draft){if(S.view!=='edit'||(S.arg||'new')!==target)return;editDraft.foto=foto;render();}
+    else{const r=S.recipes.find(x=>x.id===target);if(!r)return;r.foto=foto;await persist();render();}
+    toast(draft?'Foto zichtbaar — sla je recept op om de foto te bewaren':'Foto toegevoegd');
+  }catch(err){toast(err.message||'Deze foto kon ik niet lezen');}
 }
+
 async function verwerkImpFotoInput(lijst){ if(lijst && lijst.length) await voegFotosToe(lijst); }
 
 document.addEventListener('change', async e=>{
+  if(e.target.id==='remember-device'){try{await PanklaarSecurity.setRemembered(e.target.checked);toast(e.target.checked?'Dit apparaat blijft 30 dagen ontgrendeld':'Wachtwoord weer nodig bij openen');}catch(err){e.target.checked=false;toast(err.message);}return;}
   if(e.target.dataset.day !== undefined){
     const d = e.target.dataset.day;
     if(e.target.value) S.plan[d] = e.target.value; else delete S.plan[d];
@@ -3239,11 +3264,21 @@ document.addEventListener('input', e=>{
 function showSecurityError(error){
  const dialog=$('wachtwoordDialoog');$('wachtwoordTitel').textContent='Panklaar kan niet worden geopend';$('wachtwoordUitleg').textContent=error.message+' Je opgeslagen gegevens zijn niet verwijderd.';dialog.querySelectorAll('input,button,label').forEach(e=>e.hidden=true);if(!dialog.open)dialog.showModal();
 }
-async function lockPanklaar(){try{await PanklaarSecurity.flush();location.reload();}catch(e){toast(e.message);}}
+async function lockPanklaar(){try{await PanklaarSecurity.flush();await PanklaarSecurity.setRemembered(false);location.reload();}catch(e){toast(e.message);}}
 function setupSecurityUI(){
- const banner=$('pk-migratie');banner.hidden=false;
- const lock=document.createElement('button');lock.className='btn';lock.textContent='Vergrendelen';lock.onclick=lockPanklaar;banner.appendChild(lock);
- const message=document.createElement('p');message.textContent='Je gegevens en nieuwe back-ups zijn versleuteld. Plak je AI-sleutel bij Jij; de sleutel blijft alleen in deze ontgrendelde sessie beschikbaar.';banner.appendChild(message);
- if(location.hostname.endsWith('github.io')){const p=document.createElement('p');p.textContent='Sla hier eerst een back-up op en zet die terug op het nieuwe adres: ';const a=document.createElement('a');a.href='https://panklaar.zsj4j2s4df.workers.dev/';a.textContent='Panklaar openen';a.rel='noopener noreferrer';p.appendChild(a);banner.appendChild(p);}
- let idle;const reset=()=>{clearTimeout(idle);idle=setTimeout(()=>{if($('cook').classList.contains('on')||(S.timers||[]).some(t=>t.running&&!t.done)){reset();return;}lockPanklaar();},10*60*1000);};for(const ev of ['pointerdown','keydown','input'])document.addEventListener(ev,reset,{passive:true});reset();
+ $('pk-lock').onclick=lockPanklaar;
+ let idle;const reset=()=>{clearTimeout(idle);idle=setTimeout(()=>{if(PanklaarSecurity.isRemembered()||$('cook').classList.contains('on')||(S.timers||[]).some(t=>t.running&&!t.done)){reset();return;}lockPanklaar();},10*60*1000);};for(const ev of ['pointerdown','keydown','input'])document.addEventListener(ev,reset,{passive:true});reset();
+}
+function captureEditDraft(){
+ if(S.view!=='edit'||!$('f-name'))return;
+ editDraft={...(editDraft||{}),name:$('f-name').value,type:document.querySelector('#f-type .chip.on')?.dataset.type||'dinner',level:document.querySelector('#f-level .chip.on')?.dataset.level||'easy',mins:+$('f-mins').value,serves:+$('f-serves').value,ingredients:$('f-ing').value.split('\n'),steps:$('f-steps').value.split('\n'),uitleg:$('f-uitleg').value};
+ const old=(editDraft.tips||[]).map(tipObj);editDraft.tips=$('f-tips').value.split('\n').filter(Boolean).map(text=>old.find(t=>t.text===text)||tipObj(text));
+}
+function openPlanDay(day){
+ if(!DAYS.includes(day))return;
+ const choose=async id=>{closeMenu();if(id)S.plan[day]=id;else delete S.plan[day];await persist();render();};
+ openMenu(day+' — kies een recept',[
+  {label:'Geen maaltijd gepland',icon:'back',doe:()=>choose(null)},
+  ...S.recipes.map(r=>({label:r.name,icon:'book',doe:()=>choose(r.id)}))
+ ]);
 }
