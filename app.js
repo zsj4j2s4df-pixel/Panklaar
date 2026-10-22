@@ -6,7 +6,7 @@
 const KEY = 'panklaar:v1';
 /* Wordt bij het uitrollen gelijkgezet met de cache van de service worker,
    zodat je in de app kunt zien welke versie je telefoon vasthoudt. */
-const APP_VERSIE = 'v40';
+const APP_VERSIE = 'v41';
 let mem = null;
 let restoring=false;
 
@@ -2423,7 +2423,7 @@ function drawStep(){
   $('cookNext').textContent = cook.i === cook.steps.length-1 ? 'Klaar' : 'Volgende';
   const m = s.match(/(\d+)\s*(min|minuten|minuut)/i);
   if(m && !S.timers.some(t=>t.stepIdx===cook.i && t.recipeId===cook.recipeId && !t.done)){
-    const min = parseInt(m[1],10), label = timerLabel(s, cook.ings, m.index);
+    const min = parseInt(m[1],10), label = timerLabel(s, cook.ings, m.index, cook.steps.slice(0,cook.i));
     $('cookTimerAdd').innerHTML = `<label for="cook-timer-label" class="muted" style="font-size:15px">Timer voor</label><input id="cook-timer-label" class="inp" maxlength="80" value="${esc(label)}" aria-label="Onderwerp van de timer" style="margin:4px 0 8px"><button class="btn ghost cook-add-t" data-addtimer="${min}" data-tlabel="${esc(label)}">${ic('flame','')} Zet timer · ${min} min · ${esc(label)}</button>`;
   } else {
     $('cookTimerAdd').innerHTML = '';
@@ -2433,16 +2433,11 @@ function drawStep(){
   else { $('cookPeek').style.display='none'; }
 }
 
-/* ingrediënten die vooral meebakken of op smaak brengen; die zijn zelden het onderwerp */
-const SIDE_ING = ['olie','olijfolie','zonnebloemolie','boter','roomboter','water','bouillon','zout','peper',
-  'wijn','azijn','melk','room','bloem','suiker','kruiden','nootmuskaat','paprikapoeder','kerrie','kaneel',
-  'peterselie','basilicum','tijm','salie','oregano','laurier','citroensap','honing'];
 /* losjes vergelijken: kipfilets ~ kipfilet, rijst ~ risottorijst */
 const ingSim = (a,b) => a === b || (a.length >= 4 && b.includes(a)) || (b.length >= 4 && a.includes(b));
 const wordsOf = t => String(t).toLowerCase().replace(/[^a-zà-öø-ÿ]+/g,' ').trim().split(' ').filter(Boolean);
 /* woordjes die in een ingrediëntnaam niets zeggen ('peper en zout') */
 const ING_SKIP = ['en','of','de','het','een','met','per','voor','naar','uit','tot','in','op','aan','bij','stuks','stuk','snufje','takjes','takje','tenen','teen','blik','pak','bosje','plakken','plak'];
-const isSide = n => wordsOf(n).some(w => SIDE_ING.some(x => ingSim(w, x)));
 
 /* elk ingrediënt dat in deze tekst genoemd wordt, op volgorde van noemen */
 const ingredientWord=w=>w==='uien'?'ui':w==='eieren'?'ei':/^(?:kip|kipfilets?|kipdij(?:en)?|kippenborst(?:en)?)$/.test(w)?'kip':w;
@@ -2470,25 +2465,39 @@ function shortName(n){
   const w = wordsOf(n.replace(/\(.*?\)/g,' ')).filter(x=>!ING_ADJ.includes(x) && !ING_SKIP.includes(x));
   return (w[0] || 'timer').slice(0,16);
 }
-/* waar de timer voor is: liefst het ingrediënt dat het onderwerp is van de stap */
-function timerLabel(txt,list,at){
+/* Benoem wat bij de getimede handeling de pan in gaat. Kijk bij "laat
+   bakken" terug naar de laatste toevoeging, ook in de vorige kookstap. */
+function timerLabel(txt,list,at,previousSteps=[]){
   const source=String(txt);at=at??source.length;
-  const before=source.slice(0,at);
-  const breaks=[...before.matchAll(/[.;!?]\s+|\b(?:terwijl|ondertussen|daarna|vervolgens)\b/gi)];
-  const start=breaks.length?breaks.at(-1).index+breaks.at(-1)[0].length:0;
-  const following=source.slice(at).search(/[.;!?](?:\s|$)/);
-  const end=following<0?source.length:at+following;
-  const clause=source.slice(start,end);
-  const actions=[...before.slice(start).matchAll(/\b(?:bak|kook|rooster|fruit|stoom|gril|stoof|laat|verwarm|sudder|blancheer)\b/gi)];
-  const actionStart=actions.length?start+actions.at(-1).index:start;
-  const actionText=source.slice(actionStart,end);
-  const actionHits=stepIngs(actionText,list);
-  const hits=actionHits.length?actionHits:stepIngs(clause,list);
-  const main=hits.find(h=>!isSide(h.name))||hits[0];
-  if(main)return shortName(main.name);
-  if(/\boven\b/i.test(clause))return 'oven';
-  if(/\brust(?:en)?\b/i.test(clause))return 'rusten';
-  return labelFromStep(clause,at-start);
+  const actionPattern=/\b(?:bak|kook|rooster|fruit|stoom|gril|grill|stoof|verwarm|sudder|blancheer|wok|frituur|smelt|voeg|doe|schep|giet|leg|laat)\b/gi;
+  function subject(text,limit){
+    const actions=[...text.matchAll(actionPattern)];
+    for(let i=actions.length-1;i>=0;i--){
+      const action=actions[i];if(action.index>limit)continue;
+      const tail=text.slice(action.index+action[0].length,actions[i+1]?.index??text.length);
+      // Een latere zin of bereiding hoort niet meer bij deze handeling.
+      const object=tail.split(/[.;!?](?:\s|$)|\b(?:terwijl|ondertussen|daarna|vervolgens)\b/i)[0];
+      // "Bak ui in boter" en "voeg rijst toe aan de ui": het object staat voor het medium.
+      const direct=object.split(/\b(?:in|aan|bij|toe)\b/i)[0];
+      const directHits=stepIngs(direct,list);
+      const hits=directHits.length?directHits:stepIngs(object,list);
+      if(hits.length)return [...new Set(hits.map(h=>shortName(h.name)))].join(' en ');
+      if(/\boven\b/i.test(object)&&/verwarm/i.test(action[0]))return 'oven';
+    }
+    return '';
+  }
+  const found=subject(source,at);
+  if(found)return found;
+  if(/\brust(?:en)?\b/i.test(source))return 'rusten';
+  // Alleen terugkijken als de huidige stap zelf geen onderwerp benoemt.
+  const hits=stepIngs(source.slice(0,at),list);
+  if(hits.length)return [...new Set(hits.map(h=>shortName(h.name)))].join(' en ');
+  for(let i=previousSteps.length-1;i>=0;i--){
+    const found=subject(String(previousSteps[i]),String(previousSteps[i]).length);
+    if(found)return found;
+  }
+  if(/\boven\b/i.test(source))return 'oven';
+  return labelFromStep(source,at);
 }
 
 /* een woord uit de staptekst als klein label — werkwoorden en stopwoorden overslaan */

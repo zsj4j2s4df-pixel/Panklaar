@@ -238,3 +238,12 @@ De tests gebruiken aanraakacties en controleren foto-afmetingen, invoerfocus,
 plannerkeuzes, schermbreedte en het verlopen en intrekken van onthouden toegang.
 Een fysieke iPhone en de iOS-fotokiezer kunnen aanvullende toestelverschillen
 hebben; de test uploadt wel echte afbeeldingsbestanden en controleert de preview.
+
+### Timeronderwerpen v41
+
+De timer benoemt wat bij de getimede handeling de pan in gaat. Bijvoorbeeld:
+`Voeg ui toe aan de kip en bak 5 minuten` geeft **ui**, en `Voeg ui en knoflook
+toe en bak 3 minuten` geeft **ui en knoflook**. Bij `Laat 5 minuten bakken`
+zoekt de app de laatste toevoeging in deze of de voorgaande kookstap. Ingrediënten
+uit latere handelingen worden niet meegenomen. Ook boter kan zelf het onderwerp
+zijn, bijvoorbeeld bij smelten; het onderwerp blijft vóór starten aanpasbaar.
