@@ -1,7 +1,7 @@
 const{test,expect}=require('@playwright/test');
 const fs=require('node:fs');
 const PASS='Panklaar-testwachtwoord-2026';
-async function unlock(page,existing=false){await page.goto('/');await expect(page.locator('#wachtwoordDialoog')).toBeVisible();await page.locator('#wachtwoord').fill(PASS);if(!existing)await page.locator('#wachtwoordHerhaal').fill(PASS);await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#wachtwoordDialoog')).not.toBeVisible();await expect(page.locator('#screen')).toContainText('Panklaar');}
+async function unlock(page,existing=false){if(!existing)await page.goto('/');await expect(page.locator('#wachtwoordDialoog')).toBeVisible();await page.locator('#wachtwoord').fill(PASS);if(!existing)await page.locator('#wachtwoordHerhaal').fill(PASS);await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#wachtwoordDialoog')).not.toBeVisible();await expect(page.locator('#screen')).toContainText('Panklaar');}
 async function flush(page){await page.evaluate(()=>PanklaarSecurity.flush());}
 const recipe={id:'safe',name:'Veilig testrecept',type:'dinner',mins:20,serves:2,level:'easy',ingredients:['100 g rijst'],steps:['Kook de rijst 10 minuten.']};
 function data(){return {recipes:[recipe],shopping:[],pantry:[],plan:{},theme:'auto',family:[{id:'family1',name:'Fictief gezinslid',stages:['none'],eat:true,allergies:['noten'],allergyText:'',note:''}],equip:[],prefs:{veg:7,fish:1,meat:3,flags:[]},timers:[],usage:{},budget:5,aiDienst:'openai',aiModellen:{}};}
@@ -12,7 +12,7 @@ test('recipe CRUD, shopping, planner and reload preserve encrypted data',async({
  await page.locator('[data-go="new"]').click();await page.locator('#f-name').fill('Eigen testrecept');await page.locator('#f-ing').fill('200 g pasta\n1 courgette');await page.locator('#f-steps').fill('Kook pasta 9 min.');await page.locator('[data-save]').click();await expect(page.locator('#screen')).toContainText('Eigen testrecept');
  await page.locator('[data-addlist]').click();await page.evaluate(()=>go('shopping'));await expect(page.locator('#screen')).toContainText('pasta');await flush(page);
  await page.evaluate(()=>{S.plan.Ma=S.recipes.at(-1).id;return persist();});await flush(page);await page.reload();await unlock(page,true);
- await page.evaluate(()=>go('recipes'));await expect(page.locator('#screen')).toContainText('Eigen testrecept');await page.evaluate(()=>go('plan'));await expect(page.locator('[data-day="Ma"]')).not.toHaveValue('');
+ await page.evaluate(()=>go('recipes'));await expect(page.locator('#screen')).toContainText('Eigen testrecept');await page.evaluate(()=>go('plan'));await expect(page.locator('[data-plan-day="Ma"]')).toContainText('Eigen testrecept');
  const raw=await page.evaluate(()=>new Promise((resolve,reject)=>{const r=indexedDB.open('panklaar-secure',1);r.onsuccess=()=>{const q=r.result.transaction('vault').objectStore('vault').get('v1');q.onsuccess=()=>{resolve(JSON.stringify(q.result));r.result.close();};};r.onerror=()=>reject(r.error);}));expect(raw).not.toContain('Eigen testrecept');expect(raw).toContain('panklaar-vault');expect(errors).toEqual([]);
 });
 test('malicious photos, attributes, nested fields and pathological patterns stay inert',async({page})=>{
@@ -46,10 +46,11 @@ test('encrypted back-up migrates to another origin; modified ciphertext is rejec
  await uploadBackup(other,backup);await other.locator('#wachtwoord').fill(PASS);await other.locator('#wachtwoordDoorgaan').click();await confirmImport(other);await expect(other.locator('#screen')).toContainText('Veilig testrecept');await ctx.close();
 });
 test('AI keys remain only in memory; denied consent causes no API request',async({page})=>{
- await unlock(page);let requests=0;await page.route('https://api.openai.com/**',route=>{requests++;route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({output_text:'Testantwoord',usage:{input_tokens:1,output_tokens:1}})});});
- await page.evaluate(()=>{S.aiDienst='openai';saveAiKey('synthetic-not-a-real-key');});
- page.once('dialog',d=>d.dismiss());const denied=await page.evaluate(async()=>{try{await aiRequest({messages:[{role:'user',content:'Fictieve test'}]});return false;}catch{return true;}});expect(denied).toBeTruthy();expect(requests).toBe(0);
- page.once('dialog',d=>d.accept());expect(await page.evaluate(()=>aiRequest({messages:[{role:'user',content:'Fictieve test'}]}))).toBe('Testantwoord');expect(requests).toBe(1);
+ await unlock(page);
+ // Stub at the fetch boundary: WebKit service-worker requests may bypass page.route.
+ await page.evaluate(()=>{const original=window.fetch;window.mockAiRequests=0;window.fetch=async(input,options)=>{const url=String(input);if(url==='https://api.openai.com/v1/responses'){window.mockAiRequests++;return new Response(JSON.stringify({output_text:'Testantwoord',usage:{input_tokens:1,output_tokens:1}}),{status:200,headers:{'Content-Type':'application/json'}});}if(new URL(url,location.href).origin!==location.origin)throw new Error('External test request blocked');return original(input,options);};S.aiDienst='openai';saveAiKey('synthetic-not-a-real-key');});
+ page.once('dialog',d=>d.dismiss());const denied=await page.evaluate(async()=>{try{await aiRequest({messages:[{role:'user',content:'Fictieve test'}]});return false;}catch{return true;}});expect(denied).toBeTruthy();expect(await page.evaluate(()=>window.mockAiRequests)).toBe(0);
+ page.once('dialog',d=>d.accept());expect(await page.evaluate(()=>aiRequest({messages:[{role:'user',content:'Fictieve test'}]}))).toBe('Testantwoord');expect(await page.evaluate(()=>window.mockAiRequests)).toBe(1);
  expect(await page.evaluate(()=>JSON.stringify({...localStorage}))).not.toContain('synthetic-not-a-real-key');expect(await page.evaluate(()=>JSON.stringify(pack()))).not.toContain('synthetic-not-a-real-key');await flush(page);await page.reload();await unlock(page,true);expect(await page.evaluate(()=>aiKey())).toBe('');
 });
 test('ingredient zero divisor, orphaned timers and storage failures are handled',async({page})=>{

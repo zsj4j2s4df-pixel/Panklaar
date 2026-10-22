@@ -125,7 +125,7 @@ De hele identiteit is de hand-getekende look: SVG-wobble-filters op randen,
 inline SVG-iconen (nooit emoji) en dubbel-getekende contouren. Het getekende
 pannetje is het logo.
 
-## Beveiligde versie v39
+## Beveiligde versie en Safari-herstel v40
 
 Online: **https://panklaar.zsj4j2s4df.workers.dev/**.
 
@@ -133,12 +133,19 @@ Recepten, foto's en gezins-/allergiegegevens worden lokaal versleuteld in
 IndexedDB opgeslagen met AES-256-GCM. Het wachtwoord wordt via PBKDF2-SHA256
 (600.000 iteraties, willekeurig zout van 16 bytes) naar een sleutel omgezet.
 Elke opslagbewerking gebruikt een nieuwe willekeurige IV van 12 bytes.
-Het wachtwoord en de ontsleutelsleutel worden nooit opgeslagen of verzonden.
+Het wachtwoord wordt nooit opgeslagen of verzonden. Standaard blijft de
+ontsleutelsleutel alleen in het geheugen. Met de expliciete optie om op een
+vertrouwd apparaat ontgrendeld te blijven bewaart deze browser 30 dagen een
+niet-exporteerbare CryptoKey in IndexedDB; deze sleutel zit nooit in een back-up.
+Dit is minder afgeschermd op een gedeeld apparaat: wie toegang heeft tot deze
+browser kan de app dan openen. Vergrendelen, uitschakelen onder Jij of het
+verstrijken van de termijn verwijdert de onthouden toegang. Je wachtwoord
+blijft nodig om back-ups op een ander apparaat te openen.
 Bewaar je wachtwoord in een wachtwoordmanager: zonder wachtwoord bestaat geen
 herstelmogelijkheid. Maak regelmatig een versleutelde back-up.
 
-De app vergrendelt na 10 minuten inactiviteit, behalve tijdens de kookstand of
-zolang er een timer loopt. Je kunt ook zelf op Vergrendelen drukken. Opgeslagen
+De app vergrendelt na 10 minuten inactiviteit, behalve tijdens de kookstand,
+zolang er een timer loopt of wanneer dit apparaat bewust is onthouden. Je kunt ook zelf op Vergrendelen drukken. Opgeslagen
 timers blijven behouden, maar kunnen pas na ontgrendelen opnieuw melden.
 Een tweede tabblad kan niet tegelijk schrijven. Opslaan is pas geslaagd wanneer
 de IndexedDB-transactie is voltooid; bij een fout blijft de eerdere kopie staan.
@@ -185,7 +192,7 @@ mee naar een ander adres, apparaat of browser.
 
 ```sh
 npm ci
-npx playwright install chromium
+npx playwright install chromium webkit
 npm test
 npm run build
 ```
@@ -209,3 +216,25 @@ gh api --method PUT repos/zsj4j2s4df-pixel/Panklaar/branches/main/protection \
 Deze configuratie vereist een pull request en geslaagde automatische controles,
 ook voor beheerders. Ze blokkeert force pushes en verwijderen van `main`.
 Voor een persoonlijke repository is geen tweede menselijke goedkeurder vereist.
+
+### Safari-bugs hersteld in v40
+
+- De beveiligingsinformatie staat onder Jij. Die staat niet meer als brede kolom
+  naast de app; de app vult op mobiel weer de volledige schermbreedte.
+- SVG-filters staan op decoratieve randen en niet op containers met invoervelden.
+  De weekplanner gebruikt een aanklikbare receptenlijst in plaats van een native
+  select in een gefilterde kaart. Alle keuzen worden bewaard en zijn te wissen.
+- Ook nieuwe recepten kunnen direct een foto krijgen. De preview verschijnt vóór
+  opslaan, en getypte tekst, tips en keuzes blijven staan na de fotokiezer.
+  Eenvoudige, geldige foto's worden niet langer op bestandsgrootte afgekeurd.
+- Voorraadinvoer is aan te tikken en werkt via Enter en de plusknop.
+- Timeronderwerpen volgen de getimede handeling in de stap. Kip/kipfilet,
+  ui/uien en ei/eieren worden herkend; het onderwerp is vóór starten te wijzigen.
+- De optie om ontgrendeld te blijven is beschikbaar bij het wachtwoord en onder
+  Jij. De AI-sleutel wordt daarbij niet onthouden.
+
+Browsercontroles draaien op mobiel Chromium en mobiel WebKit (de Safari-engine).
+De tests gebruiken aanraakacties en controleren foto-afmetingen, invoerfocus,
+plannerkeuzes, schermbreedte en het verlopen en intrekken van onthouden toegang.
+Een fysieke iPhone en de iOS-fotokiezer kunnen aanvullende toestelverschillen
+hebben; de test uploadt wel echte afbeeldingsbestanden en controleert de preview.
