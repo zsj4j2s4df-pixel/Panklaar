@@ -264,3 +264,8 @@ alleen beschikbaar in de huidige sessie. De offline cache bevat ook het inlogscr
 
 Extra controles voor beide mobiele browsermotoren: het icoon en schermbreedte,
 onjuiste inloggegevens, bestaande gegevens behouden en onthouden toegang intrekken.
+
+De link ‘Wachtwoord vergeten?’ op het inlogscherm opent hulp over de
+wachtwoordmanager en versleutelde back-ups. Bij lokale versleuteling bestaat
+geen e-mailreset: zonder het bijbehorende wachtwoord zijn gegevens niet te
+herstellen. De link verandert of verwijdert geen gegevens.
