@@ -1,7 +1,7 @@
 const{test,expect}=require('@playwright/test');
 const fs=require('node:fs');
 const PASS='Panklaar-testwachtwoord-2026';
-async function unlock(page,existing=false){if(!existing)await page.goto('/');await expect(page.locator('#wachtwoordDialoog')).toBeVisible();await page.locator('#wachtwoord').fill(PASS);if(!existing)await page.locator('#wachtwoordHerhaal').fill(PASS);await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#wachtwoordDialoog')).not.toBeVisible();await expect(page.locator('#screen')).toContainText('Panklaar');}
+async function unlock(page,existing=false){if(!existing)await page.goto('/');await expect(page.locator('#wachtwoordDialoog')).toBeVisible();await page.locator('#wachtwoordDialoog').waitFor({state:'visible'});if(await page.locator('#gebruikersnaamBlok').isVisible())await page.locator('#gebruikersnaam').fill('testgebruiker');await page.locator('#wachtwoord').fill(PASS);if(!existing)await page.locator('#wachtwoordHerhaal').fill(PASS);await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#wachtwoordDialoog')).not.toBeVisible();await expect(page.locator('#screen')).toContainText('Panklaar');}
 async function flush(page){await page.evaluate(()=>PanklaarSecurity.flush());}
 const recipe={id:'safe',name:'Veilig testrecept',type:'dinner',mins:20,serves:2,level:'easy',ingredients:['100 g rijst'],steps:['Kook de rijst 10 minuten.']};
 function data(){return {recipes:[recipe],shopping:[],pantry:[],plan:{},theme:'auto',family:[{id:'family1',name:'Fictief gezinslid',stages:['none'],eat:true,allergies:['noten'],allergyText:'',note:''}],equip:[],prefs:{veg:7,fish:1,meat:3,flags:[]},timers:[],usage:{},budget:5,aiDienst:'openai',aiModellen:{}};}
@@ -36,14 +36,14 @@ test('invalid back-up leaves both memory and durable storage unchanged',async({p
 test('legacy IndexedDB migration is committed before plaintext and old keys are removed',async({page})=>{
  await page.goto('/');await page.evaluate(async d=>{await idbReq('readwrite',s=>s.put(JSON.stringify(d),'panklaar:v1'));localStorage.setItem('panklaar_openai_key','synthetic-not-a-real-key');},data());await unlock(page);
  await page.evaluate(()=>go('recipes'));await expect(page.locator('#screen')).toContainText('Veilig testrecept');expect(await page.evaluate(()=>localStorage.getItem('panklaar_openai_key'))).toBeNull();expect(await page.evaluate(()=>idbReq('readonly',s=>s.get('panklaar:v1')))).toBeUndefined();
- await page.reload();await page.locator('#wachtwoord').fill('wrong-password');await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#wachtwoordFout')).toContainText('Verkeerd wachtwoord');await expect(page.locator('#screen')).not.toContainText('Veilig testrecept');
+ await page.reload();await page.locator('#wachtwoordDialoog').waitFor({state:'visible'});if(await page.locator('#gebruikersnaamBlok').isVisible())await page.locator('#gebruikersnaam').fill('testgebruiker');await page.locator('#wachtwoord').fill('wrong-password');await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#wachtwoordFout')).toContainText('Gebruikersnaam of wachtwoord klopt niet');await expect(page.locator('#screen')).not.toContainText('Veilig testrecept');
 });
 test('encrypted back-up migrates to another origin; modified ciphertext is rejected',async({page,browser})=>{
  await unlock(page);await uploadBackup(page,{app:'panklaar',data:data()});await confirmImport(page);
  await page.evaluate(()=>{go('profile');vakOpen.backup=true;render();});const download=page.waitForEvent('download');await page.locator('#backup-maak').click();const contents=fs.readFileSync(await(await download).path(),'utf8'),backup=JSON.parse(contents);expect(contents).not.toContain('Fictief gezinslid');expect(backup.format).toBe('panklaar-vault');
- const ctx=await browser.newContext(),other=await ctx.newPage();await other.goto('http://127.0.0.1:4173');await other.locator('#wachtwoord').fill(PASS);await other.locator('#wachtwoordHerhaal').fill(PASS);await other.locator('#wachtwoordDoorgaan').click();await expect(other.locator('#wachtwoordDialoog')).not.toBeVisible();
- const corrupt={...backup,ciphertext:(backup.ciphertext[0]==='A'?'B':'A')+backup.ciphertext.slice(1)};await uploadBackup(other,corrupt);await other.locator('#wachtwoord').fill(PASS);await other.locator('#wachtwoordDoorgaan').click();await expect(other.locator('#wachtwoordFout')).toContainText('Verkeerd wachtwoord');await other.locator('#wachtwoordAnnuleren').click();
- await uploadBackup(other,backup);await other.locator('#wachtwoord').fill(PASS);await other.locator('#wachtwoordDoorgaan').click();await confirmImport(other);await expect(other.locator('#screen')).toContainText('Veilig testrecept');await ctx.close();
+ const ctx=await browser.newContext(),other=await ctx.newPage();await other.goto('http://127.0.0.1:4173');await other.locator('#wachtwoordDialoog').waitFor({state:'visible'});if(await other.locator('#gebruikersnaamBlok').isVisible())await other.locator('#gebruikersnaam').fill('testgebruiker');await other.locator('#wachtwoord').fill(PASS);await other.locator('#wachtwoordHerhaal').fill(PASS);await other.locator('#wachtwoordDoorgaan').click();await expect(other.locator('#wachtwoordDialoog')).not.toBeVisible();
+ const corrupt={...backup,ciphertext:(backup.ciphertext[0]==='A'?'B':'A')+backup.ciphertext.slice(1)};await uploadBackup(other,corrupt);await other.locator('#wachtwoordDialoog').waitFor({state:'visible'});if(await other.locator('#gebruikersnaamBlok').isVisible())await other.locator('#gebruikersnaam').fill('testgebruiker');await other.locator('#wachtwoord').fill(PASS);await other.locator('#wachtwoordDoorgaan').click();await expect(other.locator('#wachtwoordFout')).toContainText('Verkeerd wachtwoord');await other.locator('#wachtwoordAnnuleren').click();
+ await uploadBackup(other,backup);await other.locator('#wachtwoordDialoog').waitFor({state:'visible'});if(await other.locator('#gebruikersnaamBlok').isVisible())await other.locator('#gebruikersnaam').fill('testgebruiker');await other.locator('#wachtwoord').fill(PASS);await other.locator('#wachtwoordDoorgaan').click();await confirmImport(other);await expect(other.locator('#screen')).toContainText('Veilig testrecept');await ctx.close();
 });
 test('AI keys remain only in memory; denied consent causes no API request',async({page})=>{
  await unlock(page);
@@ -60,7 +60,7 @@ test('ingredient zero divisor, orphaned timers and storage failures are handled'
 });
 test('a second writable tab is blocked and offline assets are complete',async({page,context})=>{
  await unlock(page);const second=await context.newPage();await second.goto('/');await expect(second.locator('#wachtwoordUitleg')).toContainText('ander tabblad');await second.close();
- await page.evaluate(()=>navigator.serviceWorker.ready);await context.setOffline(true);await page.reload();await page.locator('#wachtwoord').fill(PASS);await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#screen')).toContainText('Panklaar');await context.setOffline(false);
+ await page.evaluate(()=>navigator.serviceWorker.ready);await context.setOffline(true);await page.reload();await page.locator('#wachtwoordDialoog').waitFor({state:'visible'});if(await page.locator('#gebruikersnaamBlok').isVisible())await page.locator('#gebruikersnaam').fill('testgebruiker');await page.locator('#wachtwoord').fill(PASS);await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#screen')).toContainText('Panklaar');await context.setOffline(false);
 });
 
 test('family editing and stored allergy warnings still work without imported regular expressions',async({page})=>{
@@ -73,7 +73,7 @@ test('family editing and stored allergy warnings still work without imported reg
 test('idle lock clears the key; cooking keeps the app available',async({page})=>{
  await page.clock.install();await unlock(page);await page.evaluate(()=>saveAiKey('synthetic-key'));
  await page.clock.fastForward(10*60*1000+1000);await expect(page.locator('#wachtwoordDialoog')).toBeVisible();
- await page.locator('#wachtwoord').fill(PASS);await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#wachtwoordDialoog')).not.toBeVisible();expect(await page.evaluate(()=>aiKey())).toBe('');
+ await page.locator('#wachtwoordDialoog').waitFor({state:'visible'});if(await page.locator('#gebruikersnaamBlok').isVisible())await page.locator('#gebruikersnaam').fill('testgebruiker');await page.locator('#wachtwoord').fill(PASS);await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#wachtwoordDialoog')).not.toBeVisible();expect(await page.evaluate(()=>aiKey())).toBe('');
  await page.evaluate(()=>openCook(S.recipes[0].id));await flush(page);await page.clock.fastForward(10*60*1000+1000);await expect(page.locator('#wachtwoordDialoog')).not.toBeVisible();await expect(page.locator('#cook')).toHaveClass(/on/);
 });
 
@@ -81,5 +81,5 @@ test('large photo back-ups decode without regex stack overflow or unbounded argu
  await unlock(page);
  await page.evaluate(async r=>{window.photoBackup=await PanklaarSecurity.backup({...pack(),recipes:[{...r,foto:'data:image/png;base64,'+'A'.repeat(4500000)}]});},recipe);
  const restored=page.evaluate(async()=>{const file=new File([window.photoBackup],'photos.json',{type:'application/json'});const d=await PanklaarSecurity.readBackup(file);return d.recipes[0].foto.length;});
- await page.locator('#wachtwoordDialoog').waitFor({state:'visible'});await page.locator('#wachtwoord').fill(PASS);await page.locator('#wachtwoordDoorgaan').click();expect(await restored).toBe(4500022);
+ await page.locator('#wachtwoordDialoog').waitFor({state:'visible'});await page.locator('#wachtwoordDialoog').waitFor({state:'visible'});if(await page.locator('#gebruikersnaamBlok').isVisible())await page.locator('#gebruikersnaam').fill('testgebruiker');await page.locator('#wachtwoord').fill(PASS);await page.locator('#wachtwoordDoorgaan').click();expect(await restored).toBe(4500022);
 });

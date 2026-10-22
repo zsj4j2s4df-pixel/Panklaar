@@ -1,9 +1,9 @@
 const{test,expect}=require('@playwright/test');
 const PASS='Safari-regressie-wachtwoord-2026';
 async function open(page,remember=false){
- await page.goto('/');await page.locator('#wachtwoord').fill(PASS);await page.locator('#wachtwoordHerhaal').fill(PASS);if(remember)await page.locator('#rememberDialog').check();await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#wachtwoordDialoog')).not.toBeVisible();await expect(page.locator('#screen')).toContainText('Panklaar');
+ await page.goto('/');await page.locator('#wachtwoordDialoog').waitFor({state:'visible'});if(await page.locator('#gebruikersnaamBlok').isVisible())await page.locator('#gebruikersnaam').fill('testgebruiker');await page.locator('#wachtwoord').fill(PASS);await page.locator('#wachtwoordHerhaal').fill(PASS);if(remember)await page.locator('#rememberDialog').check();await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#wachtwoordDialoog')).not.toBeVisible();await expect(page.locator('#screen')).toContainText('Panklaar');
 }
-async function enterPassword(page){await page.locator('#wachtwoord').fill(PASS);await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#wachtwoordDialoog')).not.toBeVisible();}
+async function enterPassword(page){await page.locator('#wachtwoordDialoog').waitFor({state:'visible'});if(await page.locator('#gebruikersnaamBlok').isVisible())await page.locator('#gebruikersnaam').fill('testgebruiker');await page.locator('#wachtwoord').fill(PASS);await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#wachtwoordDialoog')).not.toBeVisible();}
 async function image(page){const value=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=320;c.height=240;const ctx=c.getContext('2d');ctx.fillStyle='#13a66b';ctx.fillRect(0,0,c.width,c.height);return c.toDataURL('image/png').split(',')[1];});return {name:'recept.png',mimeType:'image/png',buffer:Buffer.from(value,'base64')};}
 async function choosePhoto(page,button,file){const chooser=page.waitForEvent('filechooser');await button.tap();await(await chooser).setFiles(file);}
 test('mobile app fills the viewport without the security banner squeezing it sideways',async({page})=>{
