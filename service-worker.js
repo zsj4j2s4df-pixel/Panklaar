@@ -1,5 +1,5 @@
 'use strict';
-const CACHE='panklaar-v42';
+const CACHE='panklaar-v43';
 const ASSETS=['./','./index.html','./login.js','./security.js','./app.js','./pwa.js','./manifest.json','./icon-192.png','./icon-512.png'];
 self.addEventListener('install',event=>event.waitUntil((async()=>{
  const cache=await caches.open(CACHE);
