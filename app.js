@@ -1,0 +1,3249 @@
+/* ============================================================
+   Storage — one thin layer, one key.
+   Swap the two functions below for IndexedDB when you ship this
+   as a standalone PWA; nothing else in the app touches storage.
+   ============================================================ */
+const KEY = 'panklaar:v1';
+/* Wordt bij het uitrollen gelijkgezet met de cache van de service worker,
+   zodat je in de app kunt zien welke versie je telefoon vasthoudt. */
+const APP_VERSIE = 'v38';
+let mem = null;
+let restoring=false;
+
+/* IndexedDB als primaire opslag (standalone site); valt terug op de
+   Artifact-opslag (window.storage) en anders op in-memory. */
+function idbOpen(){
+  return new Promise((res,rej)=>{
+    let r;
+    try{ r = indexedDB.open('panklaar',1); }catch(e){ return rej(e); }
+    r.onupgradeneeded = ()=>{ if(!r.result.objectStoreNames.contains('kv')) r.result.createObjectStore('kv'); };
+    r.onsuccess = ()=>res(r.result);
+    r.onerror = ()=>rej(r.error);
+  });
+}
+function idbReq(mode, fn){
+  return idbOpen().then(db=>new Promise((res,rej)=>{
+    const tx=db.transaction('kv',mode),q=fn(tx.objectStore('kv'));
+    tx.oncomplete=()=>{db.close();res(q.result);};
+    tx.onabort=tx.onerror=()=>{db.close();rej(tx.error||new Error('Opslag mislukt'));};
+  }));
+}
+async function loadLegacyData(){
+  const value=await idbReq('readonly',s=>s.get(KEY));
+  return value?(typeof value==='string'?JSON.parse(value):value):null;
+}
+async function loadData(){return PanklaarSecurity.get();}
+async function saveData(d){return PanklaarSecurity.save(d);}
+const sessionKeys=Object.create(null);
+let aiConsent=false;
+function allowAI(){
+  if(aiConsent)return;
+  if(!confirm('Voor deze AI-functie worden je vraag, recept en eventueel foto’s en gezins-/allergiegegevens naar de gekozen AI-dienst gestuurd. Dit kan API-kosten veroorzaken. Doorgaan voor deze ontgrendelde sessie?'))throw new Error('AI-aanvraag geannuleerd.');
+  aiConsent=true;
+}
+/* AI-sleutel — alleen op dit apparaat (localStorage) */
+const AI_MODEL = 'claude-sonnet-4-6';
+let lastAiError = '';
+
+/* Twee diensten om uit te kiezen. Ze doen hetzelfde werk; alleen de vorm van
+   de aanvraag en het antwoord verschilt, en dat vertalen we hieronder. */
+const DIENSTEN = {
+  anthropic: {
+    label:'Claude', merk:'Anthropic', sleutelNaam:'panklaar_ai_key', begint:'sk-ant-api…',
+    model:'claude-sonnet-4-6', console:'console.anthropic.com'
+  },
+  openai: {
+    label:'OpenAI', merk:'OpenAI', sleutelNaam:'panklaar_openai_key', begint:'sk-…',
+    model:'gpt-5-mini', console:'platform.openai.com'
+  }
+};
+function dienstId(){ return DIENSTEN[S && S.aiDienst] ? S.aiDienst : 'anthropic'; }
+function dienst(){ return DIENSTEN[dienstId()]; }
+function aiModel(){
+  const eigen = (S && S.aiModellen && S.aiModellen[dienstId()] || '').trim();
+  return eigen || dienst().model;
+}
+function aiKey(){return sessionKeys[dienstId()]||'';}
+function saveAiKey(v){sessionKeys[dienstId()]=String(v||'').trim();return true;}
+/* kan deze browser überhaupt opslaan? (privémodus blokkeert dit soms) */
+function storageOk(){ try{ localStorage.setItem('__pk_t','1'); localStorage.removeItem('__pk_t'); return true; }catch(e){ return false; } }
+function maskKey(k){ return k.length < 14 ? '•'.repeat(k.length) : `${k.slice(0,8)}…${k.slice(-4)}`; }
+function aiHeaders(){
+  const h = {'Content-Type':'application/json'};
+  const k = aiKey();
+  if(!k) return h;
+  if(dienstId() === 'openai'){ h['Authorization'] = 'Bearer ' + k; }
+  else { h['x-api-key'] = k; h['anthropic-version'] = '2023-06-01'; h['anthropic-dangerous-direct-browser-access'] = 'true'; }
+  return h;
+}
+
+/* Wat een aanvraag ongeveer kost. Anthropic rekent per miljoen tokens; het
+   zoeken op internet gaat per duizend zoekopdrachten. Prijzen van Sonnet —
+   staat de prijs of het model anders, pas ze hier aan. */
+const PRIJZEN = {
+  'claude-sonnet': {invoer:3.00, uitvoer:15.00, cacheSchrijf:3.75, cacheLees:0.30, zoeken:10.00},
+  'claude-haiku':  {invoer:1.00, uitvoer:5.00,  cacheSchrijf:1.25, cacheLees:0.10, zoeken:10.00},
+  'claude-opus':   {invoer:15.00, uitvoer:75.00, cacheSchrijf:18.75, cacheLees:1.50, zoeken:10.00},
+  'gpt-5-nano':    {invoer:0.05, uitvoer:0.40, cacheSchrijf:0, cacheLees:0.005, zoeken:10.00},
+  'gpt-5-mini':    {invoer:0.25, uitvoer:2.00, cacheSchrijf:0, cacheLees:0.025, zoeken:10.00},
+  'gpt-5':         {invoer:1.25, uitvoer:10.00, cacheSchrijf:0, cacheLees:0.125, zoeken:10.00},
+  'gpt-4o-mini':   {invoer:0.15, uitvoer:0.60, cacheSchrijf:0, cacheLees:0.075, zoeken:10.00},
+  'gpt-4o':        {invoer:2.50, uitvoer:10.00, cacheSchrijf:0, cacheLees:1.25, zoeken:10.00}
+};
+/* de langste naam die op het model past wint, zodat gpt-5-mini niet als gpt-5 telt */
+function prijsVan(model){
+  const m = String(model||'').toLowerCase();
+  let beste = null, lang = -1;
+  Object.keys(PRIJZEN).forEach(k=>{ if(m.indexOf(k) >= 0 && k.length > lang){ beste = PRIJZEN[k]; lang = k.length; } });
+  return beste || PRIJZEN['claude-sonnet'];
+}
+const PRIJS_BEELD = 0.02;   /* ruwe schatting per gemaakt plaatje (gpt-image-1, klein) */
+const PRIJS_NOOT = 'Prijzen per miljoen tokens, zoeken per duizend acties. Ze staan in de code onder PRIJZEN — klopt er iets niet meer, dan pas je ze daar aan.';
+const maandNu = () => new Date().toISOString().slice(0,7);
+const MAAND_NL = ['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
+function maandLabel(k){
+  const d = k.split('-');
+  return `${MAAND_NL[+d[1]-1]} ${d[0]}`;
+}
+function budget(){ const b = +(S.budget); return b > 0 ? b : 5; }
+function maandVak(k){
+  if(!S.usage) S.usage = {};
+  if(!S.usage[k]) S.usage[k] = {calls:0, in:0, out:0, cw:0, cr:0, zoek:0, kosten:0, gewaarschuwd:[]};
+  if(!S.usage[k].gewaarschuwd) S.usage[k].gewaarschuwd = [];
+  return S.usage[k];
+}
+/* wat één antwoord kostte, bij de maand optellen — beide diensten geven
+   tokens terug, alleen onder net iets andere namen */
+function boekGebruik(u, zoekActies){
+  if(!u) return;
+  const m = maandVak(maandNu());
+  const P = prijsVan(aiModel());
+  const cr = +u.cache_read_input_tokens || (u.input_tokens_details && +u.input_tokens_details.cached_tokens) || 0;
+  const cw = +u.cache_creation_input_tokens || 0;
+  /* bij Anthropic staan de gecachte tokens naast input_tokens, bij OpenAI erin */
+  const inv = Math.max(0, (+u.input_tokens || 0) - (u.input_tokens_details ? cr : 0));
+  const uit = +u.output_tokens || 0;
+  const zk = (u.server_tool_use && +u.server_tool_use.web_search_requests) || +zoekActies || 0;
+  m.calls += 1; m.in += inv; m.out += uit; m.cw += cw; m.cr += cr; m.zoek += zk;
+  m.kosten += (inv*P.invoer + uit*P.uitvoer + cw*P.cacheSchrijf + cr*P.cacheLees) / 1e6 + zk*P.zoeken/1000;
+}
+function dollar(n){
+  if(!n) return '$0,00';
+  if(n < 0.01) return '< $0,01';
+  return '$' + n.toFixed(2).replace('.', ',');
+}
+function getal(n){ return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
+
+/* Eén plek voor alle AI-aanroepen, zodat een echte foutmelding zichtbaar wordt
+   in plaats van een algemeen "niet gelukt". */
+/* na twee minuten stoppen we zelf, anders blijf je naar het pannetje kijken */
+function klokSignaal(ms){
+  try{
+    const c = new AbortController();
+    setTimeout(()=>{ try{ c.abort(); }catch(e){} }, ms || 240000);
+    return c.signal;
+  }catch(e){ return undefined; }
+}
+/* een fetch die er zelf uitklapt zegt niets bruikbaars; hier maken we er
+   een melding van waar je iets mee kunt */
+function verbindingsFout(naam, e, lijf){
+  const groot = lijf ? mB(lijf) : 0;
+  if(e && e.name === 'AbortError'){
+    return `${naam} deed er langer dan vier minuten over.${groot > 1
+      ? ` De aanvraag was ${groot} MB — probeer het met minder of kleinere foto's.`
+      : ' Vraag om minder recepten tegelijk, of zet bij Voorkeuren "Recepten opzoeken" uit — dat zoeken duurt het langst.'}`;
+  }
+  if(groot > 3){
+    return `De aanvraag naar ${naam} was te groot (${groot} MB) en kwam niet aan. Probeer het met één foto tegelijk, of een foto van dichterbij.`;
+  }
+  return `Geen verbinding met ${naam}. Controleer je internet en probeer het nog eens.`;
+}
+
+/* de tekst en een eventuele foto uit onze eigen aanvraagvorm halen */
+function pakInhoud(body){
+  const c = (body.messages && body.messages[0] && body.messages[0].content) || '';
+  if(typeof c === 'string') return {tekst:c, fotos:[]};
+  let tekst = '';
+  const fotos = [];
+  c.forEach(b=>{
+    if(b.type === 'text') tekst += b.text;
+    if(b.type === 'image' && b.source) fotos.push(b.source);
+  });
+  return {tekst, fotos};
+}
+
+/* OpenAI: één aanvraag, het zoeken regelt hun kant zelf */
+async function openaiRequest(body){
+  const {tekst, fotos} = pakInhoud(body);
+  const inhoud = [{type:'input_text', text:tekst}];
+  fotos.slice().reverse().forEach(f=>{
+    inhoud.unshift({type:'input_image', image_url:`data:${f.media_type};base64,${f.data}`});
+  });
+  /* gpt-5 denkt eerst na, en dat denken telt mee in de ruimte voor het
+     antwoord; met te weinig ruimte komt er alleen gedachte en geen recept */
+  const denkt = /gpt-5|^o[13]/i.test(aiModel());
+  const req = {
+    model: aiModel(),
+    input: [{role:'user', content:inhoud}],
+    max_output_tokens: Math.max(2000, Math.round((+body.max_tokens || 1000) * (denkt ? 2.5 : 1.2)))
+  };
+  if(denkt) req.reasoning = {effort:'low'};
+  if(body.tools && body.tools.length) req.tools = [{type:'web_search'}];
+  const lijf = JSON.stringify(req);
+  let res;
+  try{
+    res = await fetch('https://api.openai.com/v1/responses',
+      {method:'POST', headers:aiHeaders(), body:lijf, signal:klokSignaal()});
+  }catch(e){
+    throw new Error(verbindingsFout('OpenAI', e, lijf));
+  }
+  let data;
+  try{ data = await res.json(); }
+  catch(e){ throw new Error(`Onverwacht antwoord van OpenAI (status ${res.status}).`); }
+  if(!res.ok || (data && data.error)){
+    throw new Error((data && data.error && data.error.message) || `status ${res.status}`);
+  }
+  const stukken = Array.isArray(data.output) ? data.output : [];
+  const zoek = stukken.filter(x=>x && x.type === 'web_search_call').length;
+  let out = '';
+  stukken.forEach(x=>{
+    (x && Array.isArray(x.content) ? x.content : []).forEach(c=>{
+      if(c && (c.type === 'output_text' || c.type === 'text') && c.text) out += c.text;
+    });
+  });
+  if(!out && typeof data.output_text === 'string') out = data.output_text;
+  boekGebruik(data.usage, zoek);
+  if(!out){
+    const reden = data.status === 'incomplete' && data.incomplete_details && data.incomplete_details.reason;
+    throw new Error(reden === 'max_output_tokens'
+      ? `${aiModel()} was nog aan het nadenken toen de ruimte op was. Vraag om minder recepten tegelijk, of kies bij Jij → Model een model zonder denkstap, bijvoorbeeld gpt-4o-mini.`
+      : `Leeg antwoord van OpenAI (model ${aiModel()}). Probeer een ander model bij Jij → Model.`);
+  }
+  return out;
+}
+
+async function aiRequest(body){
+  if(!aiKey()) throw new Error(`Geen ${dienst().label}-sleutel ingevuld. Ga naar Jij → AI-sleutel.`);
+  allowAI();
+  if(dienstId() === 'openai'){
+    const t = await openaiRequest(body);
+    persist(); letOpBudget();
+    return t.replace(/```json|```/g,'').trim();
+  }
+  let msgs = (body.messages||[]).slice(), out = '';
+  /* zoeken gebeurt bij Anthropic zelf; die kan de beurt pauzeren, dus vervolgen we hem */
+  for(let round = 0; round < 4; round++){
+    let res;
+    const lijf = JSON.stringify({...body, model:aiModel(), messages:msgs});
+    try{
+      res = await fetch('https://api.anthropic.com/v1/messages',
+        {method:'POST', headers: aiHeaders(), body: lijf, signal:klokSignaal()});
+    }catch(e){
+      throw new Error(verbindingsFout('Claude', e, lijf));
+    }
+    let data;
+    try{ data = await res.json(); }
+    catch(e){ throw new Error(`Onverwacht antwoord van de AI-dienst (status ${res.status}).`); }
+    if(!res.ok || (data && data.error)){
+      const msg = (data && data.error && data.error.message) || `status ${res.status}`;
+      throw new Error(msg);
+    }
+    if(!data || !Array.isArray(data.content)) throw new Error('Leeg antwoord van de AI-dienst.');
+    boekGebruik(data.usage);
+    out = data.content.filter(c=>c.type==='text').map(c=>c.text).join('');
+    if(data.stop_reason === 'pause_turn'){ msgs = msgs.concat([{role:'assistant', content:data.content}]); continue; }
+    if(data.stop_reason === 'max_tokens'){
+      persist();
+      throw new Error('Het antwoord werd afgekapt omdat het te lang werd. Vraag om minder recepten tegelijk, of zet bij Voorkeuren "Tips" of "Uitleg" uit.');
+    }
+    break;
+  }
+  persist(); letOpBudget();
+  return out.replace(/```json|```/g,'').trim();
+}
+
+/* Een afgekapt antwoord geeft anders alleen 'JSON Parse error'. Dit zegt
+   wat er aan de hand is en wat je eraan kunt doen. */
+function leesRecept(txt){
+  let d;
+  try{ d = JSON.parse(extractJson(txt)); }
+  catch(e){
+    throw new Error('De AI stopte halverwege het antwoord. Vraag om minder recepten tegelijk, of zet bij Voorkeuren "Recepten opzoeken" of "Tips" even uit.');
+  }
+  if(Array.isArray(d)) return d[0];
+  return d;
+}
+
+/* het antwoord kan bij zoeken wat tekst rond de JSON hebben; pak het blok eruit */
+function extractJson(txt){
+  const t = String(txt).replace(/```json|```/g,'').trim();
+  const a = t.indexOf('['), c = t.indexOf('{');
+  /* wat als eerste begint bepaalt of het een lijst of één recept is */
+  if(a >= 0 && (c < 0 || a < c)){
+    const b = t.lastIndexOf(']');
+    if(b > a) return t.slice(a, b+1);
+  }
+  if(c >= 0){
+    const d = t.lastIndexOf('}');
+    if(d > c) return t.slice(c, d+1);
+  }
+  return t;
+}
+
+/* ---------------- state ---------------- */
+const TYPES = [
+  {id:'breakfast', label:'Ontbijt', v:'--breakfast'},
+  {id:'lunch',     label:'Lunch',     v:'--lunch'},
+  {id:'lunchtogo', label:'Lunch to go', v:'--lunchtogo'},
+  {id:'dinner',    label:'Avondeten', v:'--dinner'},
+  {id:'side',      label:'Bijgerecht', v:'--side'},
+  {id:'sweet',     label:'Zoet', v:'--sweet'}
+];
+const LEVELS = ['easy','medium','hard'];
+const LEVEL_NL = {easy:'makkelijk', medium:'gemiddeld', hard:'pittig'};
+const DAYS = ['Ma','Di','Wo','Do','Vr','Za','Zo'];
+
+/* ---------------- gezinsleden & voedingsrichtlijnen ----------------
+   Levensfasen/situaties met bijbehorende regels. De regels volgen de
+   publieke richtlijnen van gerenommeerde instituties — voor Nederland
+   vooral het Voedingscentrum, aangevuld met RIVM en WHO. Het zijn
+   algemene richtlijnen, geen persoonlijk medisch advies.               */
+const NUTRI_DISCLAIMER = 'Algemene richtlijnen van het Voedingscentrum (aangevuld met RIVM en WHO). Geen persoonlijk medisch advies — overleg bij twijfel met je verloskundige, huisarts, diëtist of het consultatiebureau.';
+
+const STAGES = [
+  {id:'pregnant',      label:'Zwanger'},
+  {id:'breastfeeding', label:'Borstvoeding'},
+  {id:'unborn',        label:'Ongeboren baby'},
+  {id:'infant_6_12',   label:'Baby 6–12 mnd'},
+  {id:'toddler_1_3',   label:'Peuter 1–3 jaar'},
+  {id:'child_4_12',    label:'Kind 4–12 jaar'},
+  {id:'none',          label:'Geen bijzonderheden'}
+];
+const stageLabel = id => (STAGES.find(s=>s.id===id)||{label:id}).label;
+
+/* De veertien wettelijke allergenen, met de woorden waaraan je ze in een
+   recept herkent. Plantaardige melk (amandelmelk, kokosmelk) valt bewust
+   buiten 'melk' — daar staat het woord niet los. */
+const ALLERGENS = [
+  {id:'gluten',  label:'Gluten',    pat:'tarwe|bloem|brood|broodkruim|paneermeel|pasta|spaghetti|penne|macaroni|lasagne|couscous|bulgur|griesmeel|spelt|gerst|rogge|panko|wrap|tortilla|croutons|bier|seitan'},
+  {id:'melk',    label:'Melk',      pat:'melk|kaas|boter|roomboter|room|slagroom|yoghurt|kwark|mascarpone|mozzarella|parmezaan|parmezaanse|feta|crème fraîche|creme fraiche|karnemelk|ricotta'},
+  {id:'ei',      label:'Ei',        pat:'ei|eieren|eigeel|eiwit|eidooier|mayonaise|meringue'},
+  {id:'pinda',   label:'Pinda',     pat:'pinda|pindas|pindakaas|pindaolie|satésaus|satesaus'},
+  {id:'noten',   label:'Noten',     pat:'noot|noten|walnoot|walnoten|amandel|amandelen|hazelnoot|hazelnoten|cashew|cashewnoten|pecan|pistache|macadamia|paranoot|marsepein|notenmix'},
+  {id:'soja',    label:'Soja',      pat:'soja|sojasaus|sojamelk|ketjap|tofu|tempeh|edamame|miso'},
+  {id:'vis',     label:'Vis',       pat:'vis|zalm|tonijn|kabeljauw|forel|haring|makreel|ansjovis|vissaus|surimi|koolvis|pangasius'},
+  {id:'schaal',  label:'Schaaldieren', pat:'garnaal|garnalen|kreeft|krab|scampi|langoustine|rivierkreeft'},
+  {id:'week',    label:'Weekdieren', pat:'mossel|mosselen|oester|oesters|inktvis|calamari|sint-jakobsschelp|coquille'},
+  {id:'sesam',   label:'Sesam',     pat:'sesam|sesamzaad|sesamolie|tahin|tahini|hummus'},
+  {id:'selderij',label:'Selderij',  pat:'selderij|bleekselderij|knolselderij|selderijzout'},
+  {id:'mosterd', label:'Mosterd',   pat:'mosterd|mosterdzaad|dijon'},
+  {id:'lupine',  label:'Lupine',    pat:'lupine|lupinemeel'},
+  {id:'sulfiet', label:'Sulfiet',   pat:'sulfiet|sulfieten|gedroogde abrikozen|gedroogde vijgen'}
+];
+const allergenLabel = id => (ALLERGENS.find(a=>a.id===id)||{label:id}).label;
+/* eigen tekst mag ook: 'kiwi, blauwe bessen' */
+const allergyWords = m => String((m && m.allergyText) || '').split(/[,;]+/).map(x=>x.trim()).filter(x=>x.length>2);
+function memberAllergies(m){
+  return [...((m && m.allergies) || []).map(allergenLabel), ...allergyWords(m)];
+}
+
+/* per situatie: avoid = niet eten, limit = beperken, ok = let op/mag wel */
+const STAGE_RULES = {
+  pregnant:{ src:'Voedingscentrum — Zwangerschap',
+    avoid:[
+      'Rauw en niet-doorbakken vlees; rauwe vleeswaren (carpaccio, filet américain, rauwe ham)',
+      'Rauwe en gerookte vis, rauwe schaal- en schelpdieren; gerookte/voorverpakte vis alleen goed verhit',
+      'Rauwmelkse en zachte schimmelkazen (brie, camembert, blauwaderkaas, feta van rauwe melk)',
+      'Rauw ei en gerechten met rauw ei (zelfgemaakte mayonaise, mousse, tiramisu)',
+      'Lever en leverproducten (paté, leverworst) — te veel vitamine A',
+      'Alcohol' ],
+    limit:[
+      'Cafeïne: max ± 200 mg per dag (ongeveer 2 koppen koffie)',
+      'Roofvis zoals tonijn, zwaardvis en paling — i.v.m. kwik' ],
+    ok:[
+      'Goed verhit vlees, vis en ei',
+      'Gepasteuriseerde en harde kazen',
+      'Was rauwe groente en fruit goed (toxoplasmose)' ],
+    note:'De bescherming loopt via wat de zwangere eet.' },
+  breastfeeding:{ src:'Voedingscentrum — Borstvoeding',
+    avoid:[ 'Alcohol (of sterk beperken en timen rond het voeden)' ],
+    limit:[
+      'Cafeïne: max ± 200–300 mg per dag (kan de baby onrustig maken)',
+      'Roofvis (tonijn, zwaardvis, paling) i.v.m. kwik' ],
+    ok:[
+      'Gevarieerd en volwaardig eten, voldoende vocht',
+      'Rauwmelkse kaas en verse vleeswaren mogen weer — minder streng dan tijdens de zwangerschap' ],
+    note:'Vitamine D-supplement voor moeder en baby staat los van de recepten.' },
+  unborn:{ src:'Voedingscentrum — Zwangerschap',
+    avoid:[], limit:[], ok:[],
+    note:'Een ongeboren baby eet niet zelf. De bescherming loopt volledig via het dieet van de zwangere — zie de regels bij ‘Zwanger’.' },
+  infant_6_12:{ src:'Voedingscentrum — Baby 6–12 maanden',
+    avoid:[
+      'Honing (pas vanaf 12 maanden i.v.m. botulisme)',
+      'Verslikkingsgevaar: hele noten, hele druiven/kersttomaten, harde stukjes — fijnmaken of vermijden',
+      'Rauwmelkse kaas en rauw/onvoldoende verhit ei, vlees en vis',
+      'Toegevoegd zout en toegevoegde suiker',
+      'Rijstdranken als melkvervanger (arseen)' ],
+    limit:[
+      'Koemelk als drank (kleine hoeveelheden door de pap mag)',
+      'Roofvis i.v.m. kwik' ],
+    ok:[
+      'Zacht, fijngeprakt of in zachte reepjes',
+      'Introduceer allergenen (ei, pinda, gluten) juist op tijd en gevarieerd' ],
+    note:'' },
+  toddler_1_3:{ src:'Voedingscentrum — Peuter 1–3 jaar',
+    avoid:[
+      'Verslikkingsgevaar: hele noten, hele druiven/kersttomaten, harde snoepjes, stukjes harde rauwe groente — klein snijden of vermijden',
+      'Rauwmelkse kaas en rauw/onvoldoende verhit ei, vlees en vis',
+      'Zoetstoffen en light-producten' ],
+    limit:[
+      'Zout: voeg geen zout toe, vermijd sterk gezouten producten (richtlijn max ± 2–3 g/dag)',
+      'Toegevoegde suiker',
+      'Roofvis (kwik) en rijstdranken (arseen)' ],
+    ok:[
+      'Honing mag vanaf 12 maanden',
+      'Volle zuivel (vet is nodig), klein gesneden en zachte texturen' ],
+    note:'' },
+  child_4_12:{ src:'Voedingscentrum — Kind 4–12 jaar',
+    avoid:[ 'Rauwmelkse kaas en rauw/onvoldoende verhit ei, vlees en vis' ],
+    limit:[ 'Zout en toegevoegde suiker', 'Roofvis i.v.m. kwik' ],
+    ok:[ 'Zoveel mogelijk mee-eten met het gezin, gevarieerd volgens de Schijf van Vijf' ],
+    note:'' },
+  none:{ src:'', avoid:[], limit:[], ok:[], note:'Geen bijzondere voedingsregels.' }
+};
+
+/* Waar een recept kan botsen met de situatie van wie mee-eet. De regels
+   komen uit dezelfde richtlijnen als hierboven (Voedingscentrum/RIVM/WHO). */
+const CARE_CHECKS = [
+  {id:'doorbakken', pat:'rood vlees|rosé|rose gebakken|biefstuk|hamburger|gehakt|tartaar|carpaccio|filet américain|rauwe ham|steak|lamsvlees',
+   stages:['pregnant'],
+   warn:'Vlees dat niet helemaal doorbakken is, wordt tijdens de zwangerschap afgeraden (toxoplasmose).',
+   fix:'Bak het vlees helemaal door — geen rode of rosé kern, kern minstens 70 °C.'},
+  {id:'rauwevis', pat:'rauwe vis|sushi|sashimi|gerookte zalm|gerookte vis|gerookte forel|haring|oester|mosselen rauw',
+   stages:['pregnant','infant_6_12','toddler_1_3'],
+   warn:'Rauwe of gerookte vis is af te raden (listeria).',
+   fix:'Verhit de vis goed door, of kies verse vis die je gaar bakt.'},
+  {id:'kaas', pat:'brie|camembert|blauwader|gorgonzola|roquefort|rauwmelks|rauwe melk|feta',
+   stages:['pregnant','infant_6_12','toddler_1_3'],
+   warn:'Zachte schimmelkaas en rauwmelkse kaas kunnen listeria bevatten.',
+   fix:'Neem een gepasteuriseerde of harde kaas, of verhit de kaas goed mee in het gerecht.'},
+  {id:'rauwei', pat:'rauw ei|rauwe eieren|mayonaise|tiramisu|mousse|lopende dooier|zachtgekookt ei',
+   stages:['pregnant','infant_6_12','toddler_1_3','child_4_12'],
+   warn:'Rauw of half gegaard ei wordt afgeraden (salmonella).',
+   fix:'Gaar het ei helemaal door, of gebruik gepasteuriseerd ei.'},
+  {id:'lever', pat:'lever|paté|leverworst',
+   stages:['pregnant'],
+   warn:'Lever en leverproducten bevatten veel vitamine A — niet tijdens de zwangerschap.',
+   fix:'Laat de lever weg of vervang hem door gewoon vlees of kip.'},
+  {id:'alcohol', pat:'alcohol|witte wijn|rode wijn|wijn|bier|cognac|rum|likeur|sherry|port|calvados',
+   stages:['pregnant','breastfeeding','infant_6_12','toddler_1_3','child_4_12'],
+   warn:'Er zit alcohol in dit recept.',
+   fix:'Vervang de drank door (extra) bouillon of water, of laat de alcohol volledig verdampen voor je verdergaat.'},
+  {id:'zout', pat:'zout|zeezout|bouillonblokje|bouillonblokjes|sojasaus|ketjap|maggi',
+   stages:['infant_6_12','toddler_1_3'],
+   warn:'Kleine kinderen kunnen weinig zout hebben; voeg voor hen niets extra toe.',
+   fix:'Schep het kinderdeel uit de pan vóór je zout, sojasaus of een bouillonblokje toevoegt, en gebruik zoutarme bouillon.'},
+  {id:'honing', pat:'honing',
+   stages:['infant_6_12'],
+   warn:'Honing mag pas vanaf 12 maanden (botulisme).',
+   fix:'Laat de honing weg in het babydeel, of vervang hem door wat gepureerd fruit.'},
+  {id:'verslikken', pat:'hele noten|noten|pijnboompitten|druiven|kerstomaat|kerstomaatjes|snoeptomaatjes|olijven|popcorn',
+   stages:['infant_6_12','toddler_1_3'],
+   warn:'Hele noten en ronde stukjes geven verslikkingsgevaar bij kleine kinderen.',
+   fix:'Hak ze fijn of snijd ze in de lengte door voor het kinderdeel — of laat ze daar weg.'},
+  {id:'roofvis', pat:'tonijn|zwaardvis|paling|haai|koningsmakreel|marlijn',
+   stages:['pregnant','breastfeeding','infant_6_12','toddler_1_3','child_4_12'],
+   warn:'Roofvis kan kwik bevatten; die eet je beter niet vaak.',
+   fix:'Kies een andere vis, bijvoorbeeld zalm, kabeljauw, forel of koolvis.'},
+  {id:'cafeine', pat:'koffie|espresso|cafeïne|energydrank|zwarte thee',
+   stages:['pregnant','breastfeeding','infant_6_12','toddler_1_3'],
+   warn:'Let op de cafeïne — rond zwangerschap en borstvoeding geldt maximaal ± 200 mg per dag, en voor kleine kinderen niets.',
+   fix:'Gebruik een kleinere hoeveelheid, of kies cafeïnevrij.'},
+  {id:'suiker', pat:'suiker|siroop|stroop|limonadesiroop',
+   stages:['infant_6_12'],
+   warn:'Voor een baby voeg je geen suiker toe.',
+   fix:'Laat de suiker weg in het babydeel; fruit geeft genoeg zoetheid.'}
+];
+
+/* welke punten raken dit recept, gezien wie er mee-eet? */
+function careFindings(r){
+  const fam = (S.family||[]).filter(m=>m.eat);
+  if(!fam.length) return [];
+  const txt = [...(r.ingredients||[]), ...(r.steps||[])].join(' \n ').toLowerCase();
+  const out = [];
+  /* allergie gaat voor: dat is geen 'let op' maar een harde streep */
+  fam.forEach(m=>{
+    const own = [
+      ...((m.allergies||[]).map(id=>ALLERGENS.find(a=>a.id===id)).filter(Boolean)),
+      ...allergyWords(m).map(w=>({id:'eigen:'+w, label:w, pat:w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}))
+    ];
+    own.forEach(a=>{
+      let re; try{ re = new RegExp(`\\b(${a.pat})`, 'i'); }catch(e){ return; }
+      if(!re.test(txt)) return;
+      const stepIdx = (r.steps||[]).findIndex(st=>re.test(String(st)));
+      out.push({id:'allergie:'+a.id, pat:a.pat, who:[m.name], stepIdx, on:true,
+        warn:`Dit recept bevat ${a.label.toLowerCase()} — daar is ${m.name} allergisch voor.`,
+        fix:`Laat het weg of vervang het door iets zonder ${a.label.toLowerCase()}, en controleer ook de etiketten van sauzen, bouillon en kant-en-klare producten op sporen.`});
+    });
+  });
+  CARE_CHECKS.forEach(c=>{
+    const who = fam.filter(m=>(m.stages||[]).some(st=>c.stages.includes(st))).map(m=>m.name);
+    if(!who.length) return;
+    const re = new RegExp(`\\b(${c.pat})`, 'i');
+    if(!re.test(txt)) return;
+    const stepIdx = (r.steps||[]).findIndex(st=>re.test(String(st)));
+    out.push({id:c.id, pat:c.pat, who, warn:c.warn, fix:c.fix, stepIdx, on:true});
+  });
+  return out;
+}
+
+/* alle regels van een lid: samengevoegd over zijn situaties */
+function memberRules(m){
+  const avoid=[], limit=[], ok=[], notes=[], srcs=[];
+  (m.stages||[]).forEach(id=>{
+    const r = STAGE_RULES[id]; if(!r) return;
+    r.avoid.forEach(x=>{ if(!avoid.includes(x)) avoid.push(x); });
+    r.limit.forEach(x=>{ if(!limit.includes(x)) limit.push(x); });
+    r.ok.forEach(x=>{ if(!ok.includes(x)) ok.push(x); });
+    if(r.note && !notes.includes(r.note)) notes.push(r.note);
+    if(r.src && !srcs.includes(r.src)) srcs.push(r.src);
+  });
+  return {avoid, limit, ok, notes, srcs};
+}
+
+function seedFamily(){
+  return [
+    {id:uid(), name:'Jesse', stages:['none'],                     eat:true,  note:''},
+    {id:uid(), name:'Zoë',   stages:['pregnant','breastfeeding'], eat:true,  note:''},
+    {id:uid(), name:'Leah',  stages:['toddler_1_3'],              eat:true,  note:'1 jaar'},
+    {id:uid(), name:'Baby',  stages:['unborn'],                   eat:false, note:'Ongeboren'}
+  ];
+}
+
+/* ---------------- keukenapparatuur ---------------- */
+const EQUIPMENT = [
+  {id:'hob',       label:'Kookplaat / fornuis', def:true},
+  {id:'oven',      label:'Oven',               def:true},
+  {id:'micro',     label:'Magnetron',          def:true},
+  {id:'kettle',    label:'Waterkoker',         def:true},
+  {id:'airfryer',  label:'Airfryer',           def:false},
+  {id:'fryer',     label:'Frituurpan',         def:false},
+  {id:'wok',       label:'Wok',                def:false},
+  {id:'grill',     label:'Contactgrill / tosti', def:false},
+  {id:'bbq',       label:'BBQ / grill',        def:false},
+  {id:'blender',   label:'Blender / staafmixer', def:false},
+  {id:'processor', label:'Keukenmachine',      def:false},
+  {id:'mixer',     label:'Handmixer (bakken)', def:false},
+  {id:'slow',      label:'Slowcooker',         def:false},
+  {id:'pressure',  label:'Snelkookpan',        def:false},
+  {id:'ricecooker',label:'Rijstkoker',         def:false},
+  {id:'steamer',   label:'Stoompan / stomer',  def:false},
+  {id:'toaster',   label:'Broodrooster',       def:false}
+];
+function seedEquip(){ return EQUIPMENT.filter(e=>e.def).map(e=>e.id); }
+
+/* ---------------- voorkeuren (AI-richtlijnen) ---------------- */
+const PREF_FLAGS = [
+  {id:'budget',      label:'Budget',            hint:'houd het goedkoop en budgetvriendelijk'},
+  {id:'snel',        label:'Snel koken',        hint:'snel klaar — richt op max 20–30 min en weinig stappen'},
+  {id:'gevarieerd',  label:'Gevarieerd',        hint:'iets afwisselends, niet het standaard recept'},
+  {id:'weer',        label:'Past bij het weer', hint:'passend bij het huidige weer en seizoen'},
+  {id:'restjes',     label:'Restjes gebruiken', hint:'gebruik houdbare, restjesvriendelijke ingrediënten en beperk verspilling'},
+  {id:'kind',        label:'Kindvriendelijk',   hint:'kindvriendelijk en mild gekruid'},
+  {id:'eenpans',     label:'Weinig afwas',      hint:'zo min mogelijk afwas, het liefst één pan'},
+  {id:'gezond',      label:'Gezond',            hint:'gezond en volgens de Schijf van Vijf'}
+];
+const DEFAULT_PREFS = {veg:7, fish:1, meat:3, flags:['gevarieerd'], level:'any', ai:{search:true, schijf:true, tips:true, uitleg:true}};
+
+/* kookniveau — ingesteld bij Voorkeuren, standaard klaargezet in de kookvraag */
+const LEVEL_CHOICES = [['any','Maakt niet uit'],['easy','Makkelijk'],['medium','Gemiddeld'],['hard','Pittig']];
+
+/* schakelaars die bepalen hoe de AI een recept opstelt */
+const AI_OPTS = [
+  {id:'search', label:'Recepten opzoeken', hint:'Zoekt op internet naar beproefde recepten in plaats van iets te verzinnen'},
+  {id:'schijf', label:'Schijf van Vijf',   hint:'Houdt rekening met de richtlijnen van het Voedingscentrum'},
+  {id:'tips',   label:'Tips bij het recept', hint:'Suggesties voor extra ingrediënten en kruiden'},
+  {id:'uitleg', label:'Uitleg bij bereiding', hint:'Legt uit hoe je iets doet en waarom'}
+];
+const aiOn = id => !S.prefs || !S.prefs.ai || S.prefs.ai[id] !== false;   /* standaard aan */
+const prefLevel = () => (S.prefs && S.prefs.level) || 'any';
+
+/* metrische eenheden om zelf een hoeveelheid mee op te geven */
+const UNIT_CHOICES = ['', 'stuks', 'g', 'kg', 'ml', 'l', 'el', 'tl', 'bosje', 'blik', 'pak', 'teen'];
+
+/* hoofdingrediënt — losse keuze in de pop-up, naast de voorkeuren */
+const MAIN_ING = [
+  {id:'vlees',   label:'Vlees',   hint:'met vlees als hoofdingrediënt'},
+  {id:'vis',     label:'Vis',     hint:'met vis of zeevruchten als hoofdingrediënt'},
+  {id:'groente', label:'Groente', hint:'vegetarisch, met groente als hoofdingrediënt'}
+];
+
+let S = {
+  recipes:[], shopping:[], pantry:[], plan:{}, theme:'auto', family:[], equip:[], prefs:{veg:7,fish:1,meat:3,flags:[]}, timers:[],
+  tab:'home', view:null, arg:null, filter:'all'
+};
+let impText = '', impTweak = '', impTitel = '';
+let impFotos = [];   /* foto's die klaarstaan om omgezet te worden */
+let vakOpen = {ai:false, gebruik:false, backup:false, app:false};
+const vak = k => !!vakOpen[k];
+let helpOpen = false, famOpen = false, prefOpen = false, equipOpen = false, pantOpen = false, ask = null, suggestions = [];
+let picked = new Set();   /* welke voorstellen aangevinkt staan om te bewaren */
+
+const uid=()=>crypto.randomUUID();
+
+/* ---------------- hoeveelheden lezen, schalen en optellen ----------------
+   Gebruikt voor het omrekenen van porties en voor het samenvoegen van
+   dezelfde ingrediënten op de boodschappenlijst.                          */
+const UNITS = ['g','gr','gram','kg','ml','cl','dl','l','liter','el','tl','eetlepel','theelepel',
+  'teen','tenen','stuk','stuks','blik','blikje','pak','pakje','bosje','plak','plakken','snufje','snufjes'];
+
+/* 1,5 → "1,5"  ·  2,0 → "2" */
+function fmtNum(n){
+  const r = Math.round(n*100)/100;
+  if(Math.abs(r - Math.round(r)) < 0.01) return String(Math.round(r));
+  return String(Math.round(r*10)/10).replace('.', ',');
+}
+
+/* "300 g pasta" → {qty:300, unit:'g', name:'pasta'} · "olijfolie" → {qty:null,…} */
+function parseIng(text){
+  const raw = String(text).trim();
+  const m = raw.match(/^(\d+(?:[.,]\d+)?)(?:\s*\/\s*(\d+))?\s*(.*)$/);
+  if(!m) return {qty:null, unit:'', name:raw};
+  let qty = parseFloat(m[1].replace(',', '.'));
+  if(m[2]){const divisor=parseFloat(m[2]);if(!divisor)return {qty:null,unit:"",name:raw};qty/=divisor;}
+  let rest = (m[3]||'').trim(), unit = '';
+  const w = rest.split(/\s+/);
+  if(w.length > 1 && UNITS.includes(w[0].toLowerCase().replace(/\.$/,''))){
+    unit = w[0].toLowerCase().replace(/\.$/,'');
+    rest = w.slice(1).join(' ');
+  }
+  return {qty, unit, name:rest.trim()};
+}
+function fmtIng(qty, unit, name){
+  if(qty == null) return name;
+  return `${fmtNum(qty)}${unit ? ' '+unit : ''} ${name}`.trim();
+}
+/* meervoud licht gladstrijken zodat 'courgettes' en 'courgette' samenvallen */
+function normName(n){
+  let x = String(n).toLowerCase().trim().replace(/\s+/g,' ');
+  if(x.length > 4 && x.endsWith('s')) x = x.slice(0,-1);
+  return x;
+}
+function ingKey(text){
+  const p = parseIng(text);
+  return normName(p.name) + '|' + p.unit;
+}
+/* schaalt alleen het getal vooraan; regels zonder getal blijven ongemoeid */
+function scaleIng(txt, factor){
+  if(!factor || factor === 1) return txt;
+  return String(txt).replace(/^\s*(\d+(?:[.,]\d+)?)(?:\s*\/\s*(\d+))?/, (m, a, b) => {
+    let v = parseFloat(a.replace(',', '.'));
+    if(b){const divisor=parseFloat(b);if(!divisor)return m;v/=divisor;}
+    return fmtNum(v * factor);
+  });
+}
+
+function seed(){
+  return [
+    {id:uid(), name:'Pasta met courgette en citroen', type:'dinner', mins:20, serves:4, level:'easy',
+     ingredients:['300 g pasta','2 courgettes','1 citroen','2 tenen knoflook','olijfolie','parmezaan'],
+     steps:['Zet water op en kook de pasta 9 min beetgaar.','Snijd de courgette in halve maantjes.','Bak de courgette 6 min op hoog vuur met de knoflook.','Meng alles met citroenrasp, olie en kaas.']},
+    {id:uid(), name:'Wraps met kip en yoghurtsaus', type:'lunch', mins:15, serves:2, level:'easy',
+     ingredients:['4 wraps','300 g kipfilet','1 komkommer','200 g yoghurt','paprikapoeder'],
+     steps:['Snijd de kip in reepjes en kruid met paprikapoeder.','Bak de kip 8 min tot hij gaar is.','Roer de yoghurt los met zout en peper.','Vul de wraps en rol ze strak op.']}
+  ];
+}
+
+/* ---------------- icons (never emoji) ---------------- */
+const I = {
+  home:'<path d="M4.2 11.3 12.1 4.6l7.8 6.6M6.3 10.2v9.1h11.5v-9.2M10.2 19.2v-5.1h3.8v5.2"/>',
+  book:'<path d="M4.3 5.1c2.6-.6 5.3-.5 7.7.7 2.4-1.3 5.1-1.4 7.7-.8M4.2 5.2v13.4c2.7-.6 5.4-.5 7.8.8 2.4-1.3 5-1.4 7.7-.8V5.3M12 5.9v13.4"/>',
+  cart:'<path d="M3.4 4.6h2.6l2.4 9.6h8.7l2.2-7.1H7.2M9.4 18.6a1.2 1.2 0 1 0 .1 0M17 18.6a1.2 1.2 0 1 0 .1 0"/>',
+  cal:'<path d="M4.6 6.4h14.8v12.9H4.7V6.5zM8.2 3.9v4.2M15.9 3.8v4.3M4.8 10.9h14.5"/>',
+  user:'<path d="M12 4.4c2 0 3.5 1.6 3.5 3.6S14 11.7 12 11.7 8.4 10 8.4 8s1.6-3.6 3.6-3.6zM5 19.6c.6-3.3 3.5-5.1 7-5.1s6.4 1.8 7 5.2"/>',
+  plus:'<path d="M12 5.3v13.4M5.3 12h13.4"/>',
+  spark:'<path d="M12 3.6c.9 3.7 2.7 5.6 6.4 6.5-3.7.8-5.6 2.7-6.4 6.4-.8-3.7-2.7-5.6-6.4-6.4 3.7-.9 5.6-2.8 6.4-6.5zM17.9 15.6c.4 1.8 1.3 2.7 3.1 3.1-1.8.4-2.7 1.3-3.1 3.1-.4-1.8-1.3-2.7-3.1-3.1 1.8-.4 2.7-1.3 3.1-3.1z"/>',
+  flame:'<path d="M12.1 3.4c3.4 3.6 5.6 6.3 5.6 9.4a5.7 5.7 0 0 1-11.4 0c0-2 .9-3.6 2.3-5.1.2 1.3.7 2.1 1.7 2.5-.3-2.4-.1-4.5 1.8-6.8z"/>',
+  trash:'<path d="M5.4 6.7h13.2M9.6 6.6V4.4h4.8v2.3M7 6.8l.8 12.4h8.4l.8-12.5"/>',
+  back:'<path d="M14.8 5.3 7.4 12.1l7.4 6.6"/>',
+  check:'<path d="M5.2 12.4 9.7 17 18.7 6.8"/>',
+  edit:'<path d="M16.5 4.4 19.6 7.4 8.4 18.6l-4 .9 1-3.9L16.5 4.4z"/>',
+  pot:'<path d="M5.3 9.4h13.4v5.2c0 2.5-2 4.4-4.5 4.4H9.8c-2.5 0-4.5-2-4.5-4.4V9.5zM5.2 11.2H3.4M18.8 11.1h1.8M9.4 6.6c0-1.2 1.2-1.3 1.2-2.5M13.4 6.5c0-1.2 1.2-1.3 1.2-2.5"/>',
+  chev:'<path d="M6.2 9 12 14.6 17.8 9"/>',
+  camera:'<path d="M4.4 8.5h3l1.4-2.2h6.4l1.4 2.2h3v10.1H4.3V8.6M14.6 12.4c1 1.4.4 3.3-1.2 4-1.7.5-3.4-.7-3.5-2.5-.1-1.5 1.2-2.9 2.8-2.7 .9.1 1.6.6 2 1.3"/>',
+  save:'<path d="M6.5 4.6h11v14.8l-5.5-3.7-5.5 3.7z"/>',
+  inbox:'<path d="M5.4 4.6h13.2v14.8H5.5V4.7M12 7.4v6.4M9.1 11.1 12 14.1l2.9-3"/>'
+};
+const ic = (n, cls='navic') => `<svg class="${cls}" viewBox="0 0 24 24">${I[n]}</svg>`;
+
+/* a pan, traced twice — each contour drawn again with a slightly
+   different hand, corners overshot, circles left slightly open */
+const PAN_DRAWING = `
+<div class="draw"><svg viewBox="0 0 240 140">
+  <path d="M34 62 L150 61.5 L146 96 C143 111 130 119 108 119 C74 119 56 112 50 96 Z"/>
+  <path d="M35.5 63.5 L149 63 L145 97.5 C141 112 129 121 107 120.5 C73 120 57 113 51.5 97.5 Z"/>
+  <path d="M150 70 C176 66 198 63 214 62"/>
+  <path d="M150.5 72.5 C177 68.5 199 65 215 63.5"/>
+  <path d="M212 60 C221 60.5 224 63 224 66 C224 69 220 71.5 213 71"/>
+  <path d="M213 61.5 C222 62 225.5 64.5 225 67.5 C224.5 70 219 72.5 213.5 72.5"/>
+  <path class="soft" d="M74 47 C78 39 74 35 78 27"/>
+  <path class="soft" d="M96 45 C100 37 96 33 100 25"/>
+  <path class="soft" d="M118 48 C122 40 118 36 122 28"/>
+</svg></div>`;
+
+/* pollepel en garde, gekruist — elke lijn twee keer, met een andere hand */
+const WHISK_SPOON_DRAWING = `
+<div class="draw quiet"><svg viewBox="0 0 240 140">
+  <path d="M44 30 C56 19 75 25 75 40 C75 55 57 61 46 52 C37 45 36 35 45 28"/>
+  <path d="M46.5 32 C57 23 72 28 72 41 C72 53 58 58 49 51 C41 45 40 37 47 31"/>
+  <path d="M68 53 C97 74 127 96 156 118"/>
+  <path d="M69.5 51 C99 72 129 94 158 116"/>
+  <path d="M61 61 C90 82 120 104 149 126"/>
+  <path d="M62.5 59 C92 80 122 102 151 124"/>
+  <path d="M156 118 C161 122 158 128 150 126"/>
+  <path d="M157 116.5 C163 121 159.5 129 151 127.5"/>
+  <path d="M176 50 C146 72 114 96 86 116"/>
+  <path d="M177.5 48.5 C147.5 70.5 115.5 94.5 87.5 114.5"/>
+  <path d="M170 43 C140 65 108 89 80 109"/>
+  <path d="M171.5 41.5 C141.5 63.5 109.5 87.5 81.5 107.5"/>
+  <path d="M86 116 C81 119 76 116 79 109"/>
+  <path d="M87 117.5 C81 121 74.5 117.5 78 110"/>
+  <path class="soft" d="M181 44 C186 40 190 44 186 49"/>
+  <path class="soft" d="M182 46 C187 42 191.5 46.5 187 51"/>
+  <path d="M180 44 C182 26 196 14 214 15"/>
+  <path d="M181.5 45.5 C184 28 197 16.5 215.5 16.5"/>
+  <path d="M180 44 C190 34 202 24 214 15"/>
+  <path d="M181 46 C191.5 36 203 26 215.5 16.5"/>
+  <path d="M180 44 C190 46 204 34 214 15"/>
+  <path d="M181 46 C191 48 205 36 215 17"/>
+</svg></div>`;
+
+/* snijplank met koksmes */
+const BOARD_KNIFE_DRAWING = `
+<div class="draw quiet"><svg viewBox="0 0 240 140">
+  <path d="M28 52 C90 47 150 46 206 50"/>
+  <path d="M29 54.5 C91 49.5 151 48.5 207.5 52.5"/>
+  <path d="M206 50 C210 70 210 88 205 106"/>
+  <path d="M208 51 C212.5 71 212.5 89 207 108"/>
+  <path d="M205 106 C148 112 88 112 30 107"/>
+  <path d="M204 108.5 C147 114.5 87 114.5 29.5 109.5"/>
+  <path d="M30 107 C25 88 25 70 28 52"/>
+  <path d="M27.5 106 C23 87 23 69 26 51"/>
+  <path class="soft" d="M48 98 C96 101 146 102 188 99"/>
+  <path class="soft" d="M52 90 C98 93 142 94 182 91"/>
+  <path d="M56 92 C86 80 118 68 150 58"/>
+  <path d="M57 94 C87 82 119 70 151 60"/>
+  <path d="M56 92 C84 88 118 76 150 58"/>
+  <path d="M57.5 93.5 C85 89.5 119 77.5 151.5 59.5"/>
+  <path d="M150 58 C160 54 172 50 182 48"/>
+  <path d="M151 60 C161 56 173 52 183 50"/>
+  <path d="M182 48 C187 51 187 57 181 59 C172 61 158 64 150 58"/>
+  <path d="M183 50 C188 53 188 58.5 182 61 C173 63 159 65.5 151 59.5"/>
+</svg></div>`;
+
+/* vergiet — voor het lege boodschappenscherm */
+const COLANDER_DRAWING = `
+<div class="draw"><svg viewBox="0 0 220 110">
+  <path d="M24 34 C80 29 140 29 196 34"/>
+  <path d="M25 36.5 C81 31.5 141 31.5 195 36.5"/>
+  <path d="M36 36 C40 74 66 94 110 94 C154 94 180 74 184 36"/>
+  <path d="M37.5 37.5 C42 75.5 68 95.5 110 95.5 C152 95.5 178.5 75.5 182.5 37.5"/>
+  <path d="M24 34 C12 30 6 38 14 44"/>
+  <path d="M25 36 C14 32 8.5 39 16 45.5"/>
+  <path d="M196 34 C208 30 214 38 206 44"/>
+  <path d="M195 36 C206 32 211.5 39 204 45.5"/>
+  <path class="soft" d="M76 54 C80 52 83 55 80 58 C77 60 73 57 76 53"/>
+  <path class="soft" d="M108 60 C112 58 115 61 112 64 C109 66 105 63 108 59"/>
+  <path class="soft" d="M140 54 C144 52 147 55 144 58 C141 60 137 57 140 53"/>
+  <path class="soft" d="M92 74 C96 72 99 75 96 78 C93 80 89 77 92 73"/>
+  <path class="soft" d="M124 74 C128 72 131 75 128 78 C125 80 121 77 124 73"/>
+  <path d="M96 94 C96 100 102 102 110 102 C118 102 124 100 124 94"/>
+  <path d="M97.5 95.5 C97 101 103 103.5 110 103.5 C117 103.5 123 101 123 95"/>
+</svg></div>`;
+
+/* scheidingslijntje tussen gerechten — twee keer met de hand getrokken */
+const DIVIDER = `
+<div class="divider"><svg viewBox="0 0 240 10" preserveAspectRatio="none">
+  <path d="M3 6 C40 3 80 8 120 5 C160 2 200 7 237 4"/>
+  <path d="M4 7.6 C41 4.6 81 9.6 121 6.6 C161 3.6 201 8.6 236 5.6"/>
+</svg></div>`;
+
+/* ---------------- shell ---------------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+let toastTimer;
+function toast(msg){
+  if(opslagOk===false)msg='Opslaan mislukt — maak een back-up voordat je afsluit.';
+  const t = $('toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('on'), 2400);
+}
+
+let viewServes = null;    /* tijdelijk aangepast aantal personen op het receptdetail */
+let confirmWipe = false;  /* tweede tik nodig voor 'lijst leegmaken' */
+function go(tab, view=null, arg=null){
+  viewServes = null; confirmWipe = false;
+  S.tab = tab; S.view = view; S.arg = arg;
+  render(); $('screen').scrollTop = 0;
+}
+
+function renderNav(){
+  const tabs = [['home','Start','home'],['recipes','Recepten','book'],['shopping','Lijst','cart'],['plan','Week','cal'],['profile','Jij','user']];
+  $('nav').innerHTML = tabs.map(([id,label,icon]) =>
+    `<button class="${S.tab===id?'on':''}" data-tab="${id}">${ic(icon)}<span>${label}</span></button>`).join('');
+}
+
+function render(){
+  renderNav();
+  const v = {home:viewHome, recipes:viewRecipes, shopping:viewShopping, plan:viewPlan, profile:viewProfile}[S.tab];
+  $('screen').innerHTML = S.view === 'detail'     ? viewDetail(S.arg)
+                        : S.view === 'edit'       ? viewEdit(S.arg)
+                        : S.view === 'member'     ? viewMember(S.arg)
+                        : S.view === 'memberEdit' ? viewMemberEdit(S.arg)
+                        : S.view === 'import'     ? viewImport()
+                        : S.view === 'picks'      ? viewPicks()
+                        : S.view === 'cand'       ? viewCandidate(S.arg)
+                        : v();
+}
+
+/* ---------------- screens ---------------- */
+function typeOf(id){ return TYPES.find(t=>t.id===id) || TYPES.find(t=>t.id==='dinner'); }
+
+function recipeCard(r){
+  return `<div class="sketch card" data-open="${r.id}" style="background:var(${typeOf(r.type).v})">
+    <div class="row">
+      <div class="grow">
+        <div class="name hand">${esc(r.name)}</div>
+        <div class="meta">${r.mins} min · ${r.serves} pers. · ${LEVEL_NL[r.level]||r.level}</div>
+      </div>
+      <span class="tag">${typeOf(r.type).label}</span>
+    </div>
+  </div>`;
+}
+
+function viewHome(){
+  const today = DAYS[(new Date().getDay()+6)%7];
+  const planned = S.plan[today] ? S.recipes.find(r=>r.id===S.plan[today]) : null;
+  const recent = S.recipes.slice(-3).reverse();
+  return `
+    <h1 class="title hand">Panklaar</h1>
+    <p class="subtitle">Jouw recepten, in je eigen handschrift.</p>
+    ${PAN_DRAWING}
+    <button class="btn fill big-btn" data-go="suggest">
+      <span class="ic">${ic('spark','')}</span>
+      <span class="txt"><span class="h hand">Wat kan ik koken?</span>
+      <span class="sub">Op basis van wat je in huis hebt</span></span>
+    </button>
+    <div class="eyebrow"><span>Vanavond (${today})</span><button data-tab="plan">week plannen</button></div>
+    ${planned ? recipeCard(planned) :
+      `<div class="sketch card"><div class="muted" style="font-size:18px">Nog niks gepland. Kies een recept op de Week-tab.</div></div>`}
+    <div class="eyebrow"><span>Onlangs toegevoegd</span><button data-tab="recipes">alle recepten</button></div>
+    ${recent.length ? recent.map(recipeCard).join('') :
+      `<div class="sketch card"><div class="muted" style="font-size:18px">Nog geen recepten.</div></div>`}
+    <button class="btn wide" data-go="new">${ic('plus','')} Recept toevoegen</button>
+  `;
+}
+
+function viewRecipes(){
+  const all = S.filter === 'all';
+  const list = all ? S.recipes : S.recipes.filter(r=>r.type===S.filter);
+  const known = new Set(TYPES.map(t=>t.id));
+  const groups = TYPES.map(t=>({label:t.label, items:S.recipes.filter(r=>r.type===t.id)})).filter(g=>g.items.length);
+  const rest = S.recipes.filter(r=>!known.has(r.type));
+  if(rest.length) groups.push({label:'Overig', items:rest});
+  const section = g => `<div class="eyebrow"><span>${g.label}</span><span style="font-size:16px">${g.items.length}</span></div>${g.items.map(recipeCard).join('')}`;
+  return `
+    <h1 class="title hand">Recepten</h1>
+    <p class="subtitle">${S.recipes.length} opgeslagen</p>
+    <div class="chips" style="margin-bottom:16px">
+      <button class="chip ${S.filter==='all'?'on':''}" data-filter="all">Alles</button>
+      ${TYPES.map(t=>`<button class="chip ${S.filter===t.id?'on':''}" data-filter="${t.id}">${t.label}</button>`).join('')}
+    </div>
+    ${list.length ? (all ? groups.map(section).join('') : list.map(recipeCard).join('')) : `
+      <div class="empty">
+        <div class="draw"><svg viewBox="0 0 200 90">
+          <path d="M30 44 C30 62 52 74 100 74 C148 74 170 62 170 44 Z"/>
+          <path d="M31 45.5 C32 63.5 53 75.5 100 75.5 C147 75.5 169 63 170.5 45.5 Z"/>
+          <path d="M24 43 L177 42.5"/><path d="M25 44.5 L176 44"/>
+        </svg></div>
+        <p>Nog niks hier. Voeg je eerste recept toe, dan staat het op deze plank.</p>
+      </div>`}
+    <button class="btn wide" data-go="new" style="margin-top:6px">${ic('plus','')} Recept toevoegen</button>
+    <button class="btn wide" data-go="import" style="margin-top:10px">${ic('inbox','')} Recept inladen</button>
+  `;
+}
+
+/* het lijstje om de foto — twee keer met de hand getrokken, zoals de rest */
+function fotoLijstje(r){
+  const kader = `<svg class="kader" viewBox="0 0 104 118" preserveAspectRatio="none">
+      <path d="M4 6 C34 3 72 4 100 5 C101 40 100 78 99 113 C68 115 34 114 5 113 C3 78 4 40 4 6"/>
+      <path d="M5.6 7.4 C35 4.6 73 5.6 98.4 6.6 C99.6 41 98.6 79 97.4 111.4 C67 113.6 33 112.6 6.6 111.4 C5 77 6 39 5.6 7.4"/>
+    </svg>`;
+  return `<button class="lijstje" data-recfoto="${r.id}" aria-label="${r.foto ? 'Foto bekijken of vervangen' : 'Foto toevoegen'}">
+    ${r.foto ? `<img src="${esc(r.foto)}" alt="Foto van ${esc(r.name)}">`
+             : `<div class="leeg"><svg viewBox="0 0 24 24">${I.camera}</svg><span>foto erbij</span></div>`}
+    ${kader}
+  </button>`;
+}
+
+function viewDetail(id){
+  const r = S.recipes.find(x=>x.id===id);
+  if(!r) return viewRecipes();
+  const baseServes = Math.max(1, +r.serves || 1);
+  const serves = Math.max(1, viewServes || baseServes);
+  const factor = serves / baseServes;
+  const V = withTips(r);
+  return `
+    <div class="detail-top">
+      <button class="back" data-tab="recipes" aria-label="Terug">${ic('back','')}</button>
+      <button class="icon-btn" data-go="edit" data-id="${r.id}" aria-label="Recept bewerken">${ic('edit','')}</button>
+    </div>
+    <div class="titelrij">
+      <div class="grow">
+        <h1 class="title hand" style="font-size:36px;margin:0">${esc(r.name)}</h1>
+        <p class="subtitle">${typeOf(r.type).label}</p>
+      </div>
+      ${fotoLijstje(r)}
+    </div>
+    <div class="sketch card" style="background:var(${typeOf(r.type).v})">
+      <div class="stat-grid">
+        <div class="stat"><div class="k">Tijd</div><div class="v hand">${r.mins}′</div></div>
+        <div class="stat"><div class="k">Personen</div>
+          <div class="serve-row">
+            <button class="serve-btn" data-serves="-1" aria-label="Minder personen">−</button>
+            <span class="v hand">${serves}</span>
+            <button class="serve-btn" data-serves="1" aria-label="Meer personen">+</button>
+          </div>
+        </div>
+        <div class="stat"><div class="k">Niveau</div><div class="v hand">${LEVEL_NL[r.level]||r.level}</div></div>
+      </div>
+    </div>
+    ${(r.care||[]).length ? `
+    <div class="eyebrow"><span>Let op</span></div>
+    <div class="sketch card">
+      ${r.care.map(c=>`<div class="care-note">
+        <div class="who">Voor ${esc((c.who||[]).join(' en '))}</div>
+        <div class="w">${esc(c.warn)}</div>
+        <div class="f">${esc(c.fix)}</div>
+      </div>`).join('')}
+    </div>` : ''}
+    <div class="eyebrow"><span>Ingrediënten</span><button data-addlist="${r.id}">op lijst</button></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 8px">Vink aan wat je al in huis hebt — dat gaat niet naar je lijst.${factor!==1?` Hoeveelheden omgerekend van ${baseServes} naar ${serves} personen.`:''}</div>
+    <div class="sketch card">
+      ${V.ingredients.map((i,ix)=>{
+        const have = (r.have||[]).includes(i);
+        return `<div class="step" style="align-items:center">
+          <button class="tickbox ${have?'on':''}" data-have="${r.id}:${ix}" aria-label="Al in huis">${ic('check','')}</button>
+          <span class="tx ${have?'done':''}">${esc(scaleIng(i, factor))}</span>
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="eyebrow"><span>Stappen</span></div>
+    <div class="sketch card">
+      ${V.steps.map((s,i)=>`<div class="step"><span class="n hand">${i+1}</span><span class="tx">${esc(s)}</span></div>`).join('')}
+    </div>
+    ${extraBlocks(r, true)}
+    <button class="btn fill wide" data-cook="${r.id}" style="margin-top:4px">${ic('flame','')} Begin met koken</button>
+    <button class="btn ghost wide" data-del="${r.id}" style="margin-top:10px">${ic('trash','')} Recept verwijderen</button>
+  `;
+}
+
+function viewEdit(id){
+  const r = id ? S.recipes.find(x=>x.id===id) : null;
+  const d = r || {name:'',type:'dinner',mins:30,serves:2,level:'easy',ingredients:[],steps:[]};
+  const tipsTxt = (d.tips||[]).map(t=>tipObj(t).text).join('\n');
+  return `
+    <div class="detail-top">
+      <button class="back" data-tab="recipes" aria-label="Terug">${ic('back','')}</button>
+      <span class="h hand">${r ? 'Recept bewerken' : 'Nieuw recept'}</span>
+      <span style="width:28px"></span>
+    </div>
+    <div class="field" style="margin-top:14px">
+      <label for="f-name">Naam</label>
+      <input class="inp" id="f-name" value="${esc(d.name)}" placeholder="Pasta pesto">
+    </div>
+    <div class="field">
+      <label>Soort maaltijd</label>
+      <div class="chips" id="f-type">
+        ${TYPES.map(t=>`<button class="chip ${d.type===t.id?'on':''}" data-type="${t.id}">${t.label}</button>`).join('')}
+      </div>
+    </div>
+    <div class="split">
+      <div class="field"><label for="f-mins">Minuten</label><input class="inp" id="f-mins" type="number" inputmode="numeric" value="${d.mins}"></div>
+      <div class="field"><label for="f-serves">Personen</label><input class="inp" id="f-serves" type="number" inputmode="numeric" value="${d.serves}"></div>
+    </div>
+    <div class="field">
+      <label>Niveau</label>
+      <div class="chips" id="f-level">
+        ${LEVELS.map(l=>`<button class="chip ${d.level===l?'on':''}" data-level="${l}">${LEVEL_NL[l]}</button>`).join('')}
+      </div>
+    </div>
+    <div class="field">
+      <label for="f-ing">Ingrediënten — één per regel</label>
+      <textarea class="inp" id="f-ing" rows="6" placeholder="300 g pasta&#10;1 bosje basilicum">${esc(d.ingredients.join('\n'))}</textarea>
+    </div>
+    <div class="field">
+      <label for="f-steps">Stappen — één per regel</label>
+      <textarea class="inp" id="f-steps" rows="7" placeholder="Kook de pasta 9 min.&#10;Roer de pesto erdoor.">${esc(d.steps.join('\n'))}</textarea>
+    </div>
+    <div class="field">
+      <label for="f-tips">Tips — één per regel</label>
+      <textarea class="inp" id="f-tips" rows="3" placeholder="Een handvol geroosterde pijnboompitten erover.">${esc(tipsTxt)}</textarea>
+    </div>
+    <div class="field">
+      <label for="f-uitleg">Waarom zo? (optioneel)</label>
+      <textarea class="inp" id="f-uitleg" rows="3" placeholder="Waarom je het op deze manier doet.">${esc(d.uitleg||'')}</textarea>
+    </div>
+    ${r ? `<div class="field">
+      <label>Foto</label>
+      <div class="split">
+        <button class="btn" id="f-foto" style="flex:1">${ic('camera','')} ${d.foto ? 'Foto vervangen' : 'Foto toevoegen'}</button>
+        ${d.foto ? `<button class="btn ghost" data-fotoweg="${r.id}" aria-label="Foto weghalen">${ic('trash','')}</button>` : ''}
+      </div>
+    </div>` : ''}
+    <button class="btn fill wide" data-save="${r ? r.id : 'new'}">${ic('check','')} Recept opslaan</button>
+  `;
+}
+
+function viewShopping(){
+  const open = S.shopping.filter(i=>!i.done), done = S.shopping.filter(i=>i.done);
+  return `
+    <h1 class="title hand">Boodschappenlijst</h1>
+    <p class="subtitle">${open.length} te halen</p>
+    <div class="sketch card" data-pantmenu="1" style="cursor:pointer;margin-bottom:14px">
+      <div class="row">
+        <div class="grow"><div class="name hand">Wat heb ik in huis</div><div class="meta">${S.pantry.length} in voorraad · voor 'Wat zullen we koken?'</div></div>
+        <span class="fam-chev ${pantOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
+      </div>
+    </div>
+    ${pantOpen ? `
+    <button class="btn wide" id="pan-photo-btn" style="margin-bottom:8px">${ic('camera','')} Foto maken</button>
+    <input type="file" accept="image/*" id="pan-photo-input" class="bestandveld" aria-hidden="true" tabindex="-1">
+    <div class="muted" style="font-size:14px;margin:0 4px 12px;line-height:1.4">Maak een foto van je koelkast of kast — ik herken de ingrediënten. Of typ ze hieronder.</div>
+    <div class="split" style="margin-bottom:14px">
+      <input class="inp" id="pan-in" placeholder="Ingrediënt typen" style="flex:1">
+      <button class="btn fill" id="pan-add" aria-label="Toevoegen">${ic('plus','')}</button>
+    </div>
+    <div class="chips" style="margin-bottom:14px">
+      ${S.pantry.length ? S.pantry.map(p=>`<button class="chip on" data-pan="${esc(p)}">${esc(p)} ×</button>`).join('')
+        : `<span class="muted" style="font-size:17px">Nog niks in voorraad.</span>`}
+    </div>
+    <button class="btn fill wide" data-go="suggest" style="margin-bottom:20px">${ic('spark','')} Wat zullen we koken?</button>` : ''}
+    <div class="split" style="margin-bottom:8px">
+      <input class="inp" id="shop-qty" type="number" inputmode="decimal" placeholder="Aantal" style="flex:1">
+      <select class="inp" id="shop-unit" style="flex:1">
+        ${UNIT_CHOICES.map(u=>`<option value="${u}">${u || '— eenheid —'}</option>`).join('')}
+      </select>
+    </div>
+    <div class="split" style="margin-bottom:16px">
+      <input class="inp" id="shop-in" placeholder="Wat wil je toevoegen?" style="flex:1">
+      <button class="btn fill" id="shop-add" aria-label="Toevoegen">${ic('plus','')}</button>
+    </div>
+    ${!S.shopping.length ? `<div class="empty">${COLANDER_DRAWING}<p>Leeg. Voeg hier items toe, of open een recept en tik op "op lijst".</p></div>` : ''}
+    ${(() => {
+      const rows = i => `<div class="sketch soft list-item">
+        <button class="tickbox" data-tick="${i.id}" aria-label="Afvinken">${ic('check','')}</button>
+        <span class="grow">${esc(i.text)}</span>
+        <button class="icon-btn" data-rm="${i.id}" aria-label="Verwijderen">${ic('trash','')}</button>
+      </div>`;
+      const groups = [];
+      open.forEach(i => {
+        const key = i.from || '';
+        let g = groups.find(x => x.key === key);
+        if(!g){ g = {key, items:[]}; groups.push(g); }
+        g.items.push(i);
+      });
+      /* alles zelf toegevoegd? dan geen kopjes, dat oogt rustiger */
+      if(groups.length === 1 && !groups[0].key) return groups[0].items.map(rows).join('');
+      return groups.map((g, ix) => `${ix ? DIVIDER : ''}
+        <div class="eyebrow"><span>${esc(g.key || 'Zelf toegevoegd')}</span><span style="font-size:16px">${g.items.length}</span></div>
+        ${g.items.map(rows).join('')}`).join('');
+    })()}
+    ${done.length ? `<div class="eyebrow"><span>In het mandje</span><button id="shop-clear">leeg</button></div>` : ''}
+    ${done.map(i=>`<div class="sketch soft list-item">
+        <button class="tickbox on" data-tick="${i.id}" aria-label="Vinkje weg">${ic('check','')}</button>
+        <span class="grow done">${esc(i.text)}</span>
+      </div>`).join('')}
+    ${done.length ? `<button class="btn wide" id="shop-to-pantry" style="margin-top:10px">${ic('check','')} Afgevinkt naar 'in huis'</button>` : ''}
+    ${S.shopping.length ? `<button class="btn ${confirmWipe?'fill':'ghost'} wide" id="shop-wipe" style="margin-top:14px">
+      ${ic('trash','')} ${confirmWipe ? 'Zeker weten? Tik nogmaals' : 'Lijst leegmaken'}
+    </button>` : ''}
+  `;
+}
+
+function viewPlan(){
+  return `
+    <h1 class="title hand">Deze week</h1>
+    <p class="subtitle">Tik op een dag om de maaltijd te kiezen.</p>
+    ${DAYS.map(d=>{
+      const r = S.plan[d] ? S.recipes.find(x=>x.id===S.plan[d]) : null;
+      return `<div class="sketch card" ${r?`style="background:var(${typeOf(r.type).v})"`:''}>
+        <div class="row">
+          <span class="hand" style="font-size:22px;width:52px">${d}</span>
+          <select class="inp grow" data-day="${d}" style="font-size:18px;padding:9px 12px">
+            <option value="">— nog niks —</option>
+            ${S.recipes.map(x=>`<option value="${x.id}" ${S.plan[d]===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}
+          </select>
+        </div>
+      </div>`;
+    }).join('')}
+    <button class="btn wide" id="plan-shop" style="margin-top:6px">${ic('cart','')} Week naar boodschappenlijst</button>
+    ${BOARD_KNIFE_DRAWING}
+  `;
+}
+
+function viewProfile(){
+  return `
+    <h1 class="title hand">Jouw keuken</h1>
+    <p class="subtitle">Wat er in huis is, en hoe alles eruitziet.</p>
+    <div class="sketch card" data-help="1" style="cursor:pointer;margin-bottom:14px">
+      <div class="row">
+        <div class="grow"><div class="name hand">Uitleg</div><div class="meta">Hoe werkt Panklaar &amp; de AI-sleutel</div></div>
+        <span class="fam-chev ${helpOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
+      </div>
+    </div>
+    ${helpOpen ? `
+    <div class="sketch card">
+      <div style="font-size:17px;line-height:1.5">
+        Panklaar bewaart je recepten en bedenkt er nieuwe bij die passen bij wie er mee-eet.
+        Boodschappenlijst, weekplanner en voorraad zitten erin. Alles blijft op je eigen apparaat.
+      </div>
+    </div>
+    <div class="eyebrow"><span>Zo begin je</span></div>
+    <div class="sketch card">
+      <div class="step"><span class="n hand">1</span><span class="tx">Vul je huisgenoten in bij <span class="hand">Gezinsleden</span>. De app houdt dan rekening met wat ieder wel en niet mag eten.</span></div>
+      <div class="step"><span class="n hand">2</span><span class="tx">Zet aan wat je hebt bij <span class="hand">Keukenapparatuur</span>, zodat recepten daarop aansluiten.</span></div>
+      <div class="step"><span class="n hand">3</span><span class="tx">Wil je recepten laten bedenken? Dan heb je een AI-sleutel nodig — zie hieronder.</span></div>
+    </div>
+    <div class="eyebrow"><span>AI-sleutel stap voor stap</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">
+      Alleen nodig voor <span class="hand">Wat zullen we koken?</span> en de voorraad-foto. Zonder sleutel werkt de rest van de app gewoon.
+      Je kiest zelf of je <span class="hand">Claude</span> of <span class="hand">OpenAI</span> gebruikt; de stappen zijn bij allebei hetzelfde, alleen de website verschilt.
+    </div>
+    <div class="sketch card">
+      <div class="step"><span class="n hand">1</span><span class="tx">Ga naar <span class="hand">${esc(dienst().console)}</span> en log in, of maak een account aan.</span></div>
+      <div class="step"><span class="n hand">2</span><span class="tx">Zet tegoed op je account bij <span class="hand">Billing</span>. Let op: een Claude-abonnement (Pro of Max) telt hier niet voor mee — de API werkt met apart tegoed.</span></div>
+      <div class="step"><span class="n hand">3</span><span class="tx">Open <span class="hand">API Keys</span> en klik op <span class="hand">Create Key</span>.</span></div>
+      <div class="step"><span class="n hand">4</span><span class="tx">Kopieer de sleutel — die begint met <span class="hand">${esc(dienst().begint)}</span> en is maar één keer te zien.</span></div>
+      <div class="step"><span class="n hand">5</span><span class="tx">Plak hem hieronder bij <span class="hand">AI-sleutel</span> en tik op <span class="hand">Sleutel testen</span>.</span></div>
+    </div>
+    <div class="eyebrow"><span>Boodschappen via Siri</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">
+      Siri kan niet rechtstreeks met een webapp praten — daarvoor is een echte app uit de App Store nodig. Via de <span class="hand">Opdrachten</span>-app (Shortcuts) lukt het wel. Je maakt dit één keer aan.
+    </div>
+    <div class="sketch card">
+      <div class="step"><span class="n hand">1</span><span class="tx">Open <span class="hand">Opdrachten</span> op je iPhone en maak een nieuwe opdracht.</span></div>
+      <div class="step"><span class="n hand">2</span><span class="tx">Voeg <span class="hand">Vraag om invoer</span> toe, met als vraag "Wat moet erbij?".</span></div>
+      <div class="step"><span class="n hand">3</span><span class="tx">Voeg <span class="hand">URL</span> toe en zet daar het webadres van Panklaar neer met <span class="hand">?add=</span> erachter, gevolgd door de <span class="hand">Opgegeven tekst</span>.</span></div>
+      <div class="step"><span class="n hand">4</span><span class="tx">Voeg <span class="hand">Open URL</span> toe als laatste stap.</span></div>
+      <div class="step"><span class="n hand">5</span><span class="tx">Noem de opdracht <span class="hand">Voeg toe aan Panklaar</span>. Daarna werkt "Hé Siri, voeg toe aan Panklaar".</span></div>
+    </div>
+    <div class="sketch soft card" style="margin-bottom:20px">
+      <div class="muted" style="font-size:14px;line-height:1.45">
+        Panklaar opent dan kort en zet de items op je lijst. Helemaal op de achtergrond kan niet, omdat je lijst op je eigen telefoon staat en niet op een server.
+      </div>
+    </div>
+    <div class="eyebrow"><span>Goed om te weten</span></div>
+    <div class="sketch soft card" style="margin-bottom:20px">
+      <div class="step"><span class="n">·</span><span class="tx">De sleutel blijft in deze ontgrendelde sessie en gaat nergens anders heen.</span></div>
+      <div class="step"><span class="n">·</span><span class="tx">Elke website bewaart z'n eigen sleutel. Gebruik je Panklaar ook op een andere telefoon, plak hem daar dan opnieuw.</span></div>
+      <div class="step"><span class="n">·</span><span class="tx">Claude en OpenAI hebben elk hun eigen sleutel en hun eigen tegoed. Wisselen kan altijd; wat je invulde blijft staan.</span></div>
+      <div class="step"><span class="n">·</span><span class="tx">De kosten zijn klein: grofweg een paar cent per keer dat je recepten laat bedenken.</span></div>
+      <div class="step"><span class="n">·</span><span class="tx">De voedingsregels bij gezinsleden volgen het Voedingscentrum, maar dit is geen medisch advies — overleg bij twijfel met je verloskundige, huisarts of het consultatiebureau.</span></div>
+    </div>` : ''}
+    <div class="sketch card" data-fam="toggle" style="cursor:pointer;margin-bottom:14px">
+      <div class="row">
+        <div class="grow">
+          <div class="name hand">Gezinsleden</div>
+          <div class="meta">${S.family.length} ${S.family.length===1?'lid':'leden'} · telt mee bij recepten</div>
+        </div>
+        <span class="fam-chev ${famOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
+      </div>
+    </div>
+    ${famOpen ? `
+    ${S.family.length ? S.family.map(familyCard).join('')
+      : `<div class="sketch card"><div class="muted" style="font-size:17px">Nog geen gezinsleden. Voeg ze toe zodat recepten rekening houden met wie mee-eet.</div></div>`}
+    <button class="btn wide" data-memberedit="new" style="margin-bottom:14px">${ic('plus','')} Gezinslid toevoegen</button>
+    <div class="sketch soft card" style="margin-bottom:20px">
+      <div class="muted" style="font-size:15px;line-height:1.45">Wie ‘eet mee’ aangevinkt heeft, telt mee bij <span class="hand">Wat kan ik koken?</span>. ${NUTRI_DISCLAIMER}</div>
+    </div>` : ''}
+    <div class="sketch card" data-prefmenu="1" style="cursor:pointer;margin-bottom:14px">
+      <div class="row">
+        <div class="grow"><div class="name hand">Voorkeuren</div><div class="meta">Richtlijnen voor de AI</div></div>
+        <span class="fam-chev ${prefOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
+      </div>
+    </div>
+    ${prefOpen ? `
+    <div class="sketch card" style="margin-bottom:14px">
+      <div class="pref-row"><span>Groenten</span><input type="range" min="0" max="7" value="${S.prefs.veg}" data-slider="veg"><span class="pref-val hand" id="val-veg">${S.prefs.veg}×</span></div>
+      <div class="pref-row"><span>Vis</span><input type="range" min="0" max="7" value="${S.prefs.fish}" data-slider="fish"><span class="pref-val hand" id="val-fish">${S.prefs.fish}×</span></div>
+      <div class="pref-row" style="margin-bottom:6px"><span>Vlees</span><input type="range" min="0" max="7" value="${S.prefs.meat}" data-slider="meat"><span class="pref-val hand" id="val-meat">${S.prefs.meat}×</span></div>
+      <div class="muted" style="font-size:14px">Aantal dagen per week</div>
+    </div>
+    <div class="eyebrow"><span>Hoe de AI recepten opstelt</span></div>
+    <div class="chips" style="margin-bottom:8px">
+      ${AI_OPTS.map(o=>`<button class="chip ${aiOn(o.id)?'on':''}" data-aiopt="${o.id}">${o.label}</button>`).join('')}
+    </div>
+    <div class="muted" style="font-size:14px;margin:0 4px 20px;line-height:1.45">
+      ${AI_OPTS.filter(o=>aiOn(o.id)).map(o=>o.hint).join(' · ') || 'Alles uit: de AI bedenkt een kaal recept.'}
+    </div>
+    <div class="eyebrow"><span>Kookniveau</span></div>
+    <div class="chips" style="margin-bottom:20px">
+      ${LEVEL_CHOICES.map(([v,l])=>`<button class="chip ${prefLevel()===v?'on':''}" data-preflevel="${v}">${l}</button>`).join('')}
+    </div>
+    <div class="eyebrow"><span>Wat is belangrijk?</span></div>
+    <div class="chips" style="margin-bottom:20px">
+      ${PREF_FLAGS.map(f=>`<button class="chip ${(S.prefs.flags||[]).includes(f.id)?'on':''}" data-prefflag="${f.id}">${f.label}</button>`).join('')}
+    </div>` : ''}
+    <div class="sketch card" data-equipmenu="1" style="cursor:pointer;margin-bottom:14px">
+      <div class="row">
+        <div class="grow"><div class="name hand">Keukenapparatuur</div><div class="meta">${(S.equip||[]).length} geselecteerd · richtlijn voor de AI</div></div>
+        <span class="fam-chev ${equipOpen?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
+      </div>
+    </div>
+    ${equipOpen ? `
+    <div class="chips" style="margin-bottom:20px">
+      ${EQUIPMENT.map(e=>`<button class="chip ${(S.equip||[]).includes(e.id)?'on':''}" data-equip="${e.id}">${e.label}</button>`).join('')}
+    </div>` : ''}
+    ${vakKop('ai', 'AI en sleutel', aiKey()
+      ? `${dienst().label} · ${aiModel()}`
+      : `Nog geen sleutel · ${dienst().label}`)}
+    ${vak('ai') ? `
+    <div class="eyebrow"><span>AI-dienst</span></div>
+    <div class="chips" style="margin-bottom:8px">
+      ${Object.keys(DIENSTEN).map(k=>`<button class="chip ${dienstId()===k?'on':''}" data-dienst="${k}">${DIENSTEN[k].label}</button>`).join('')}
+    </div>
+    <div class="muted" style="font-size:14px;margin:0 4px 16px;line-height:1.45">
+      Beide kunnen recepten bedenken, inladen, vragen beantwoorden en een foto van je voorraad lezen. Elke dienst heeft z'n eigen sleutel; je kunt dus wisselen zonder iets kwijt te raken.
+    </div>
+    <div class="eyebrow"><span>${esc(dienst().merk)}-sleutel</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 10px;line-height:1.4">Plak je ${esc(dienst().merk)} API-sleutel zodat 'Wat zullen we koken?' en de voorraad-foto werken. Blijft alleen op dit apparaat.</div>
+    <div class="split" style="margin-bottom:10px">
+      <input class="inp" id="ai-key" type="password" placeholder="${esc(dienst().begint)}" value="${esc(aiKey())}" style="flex:1">
+      <button class="btn fill" id="ai-save" aria-label="Sleutel opslaan">${ic('check','')}</button>
+    </div>
+    <div class="field" style="margin-bottom:10px">
+      <label for="ai-model">Model</label>
+      <div class="split">
+        <input class="inp" id="ai-model" value="${esc(aiModel())}" placeholder="${esc(dienst().model)}" style="flex:1">
+        <button class="btn fill" id="ai-model-save" aria-label="Model opslaan">${ic('check','')}</button>
+      </div>
+    </div>
+    <div class="muted" style="font-size:14px;margin:0 4px 10px;line-height:1.45">
+      Standaard <span class="hand">${esc(dienst().model)}</span>. Kent de dienst die naam niet, dan zie je dat in de melding hieronder en vul je een andere in.
+    </div>
+    <div class="sketch soft card" style="margin-bottom:10px">
+      <div style="font-size:15px;line-height:1.45">
+        ${!storageOk()
+          ? 'De sleutel blijft alleen tijdens deze ontgrendelde sessie beschikbaar.'
+          : aiKey()
+            ? `${esc(dienst().merk)}-sleutel opgeslagen op dit apparaat: <span class="hand">${esc(maskKey(aiKey()))}</span>`
+            : `Nog geen ${esc(dienst().merk)}-sleutel in deze sessie. Plak hem opnieuw na vergrendelen.`}
+      </div>
+    </div>
+    <button class="btn ghost wide" id="ai-test" style="margin-bottom:10px">${ic('spark','')} Sleutel testen</button>
+    ${lastAiError ? `<div class="sketch soft card" style="margin-bottom:14px">
+      <div class="muted" style="font-size:14px;line-height:1.45">Laatste AI-melding: ${esc(lastAiError)}</div>
+    </div>` : ''}` : ''}
+
+    ${vakKop('gebruik', 'AI-gebruik', `${dollar(maandVak(maandNu()).kosten)} deze maand · van ${dollar(budget())}`)}
+    ${vak('gebruik') ? gebruikBlok() : ''}
+
+    ${vakKop('backup', 'Back-up', `${S.recipes.length} recepten · bewaren of terugzetten`)}
+    ${vak('backup') ? `
+    <div class="muted" style="font-size:14px;margin:0 4px 10px;line-height:1.45">
+      Alles staat op dit apparaat en nergens anders. Maak af en toe een back-up: één bestand met je recepten, foto's, gezinsleden, voorkeuren, voorraad, lijst en weekplanning. Je AI-sleutel gaat er bewust niet in.
+    </div>
+    <button class="btn fill wide" id="backup-maak" style="margin-bottom:10px">${ic('save','')} Back-up maken</button>
+    <button class="btn wide" id="backup-terug" style="margin-bottom:10px">${ic('inbox','')} Back-up terugzetten</button>
+    <input type="file" accept=".json,application/json" id="backup-input" class="bestandveld" aria-hidden="true" tabindex="-1">
+    <div class="muted" style="font-size:14px;margin:0 4px 20px;line-height:1.45">
+      Bewaren kan in Bestanden, iCloud of je mail — waar je hem later terugvindt. Terugzetten vervangt alles wat er nu in de app staat.
+    </div>` : ''}
+
+    ${vakKop('app', 'App', `${APP_VERSIE} · weergave, vegen, opslag`)}
+    ${vak('app') ? `
+    <div class="eyebrow"><span>Bediening</span></div>
+    <div class="chips" style="margin-bottom:8px">
+      <button class="chip ${veegAan()?'on':''}" data-veeg="1">Terugvegen ${veegAan()?'aan':'uit'}</button>
+    </div>
+    <div class="muted" style="font-size:14px;margin:0 4px 20px;line-height:1.45">
+      Een veeg van links naar rechts gaat een stap terug. Werkt dat op jouw telefoon niet prettig, zet het dan uit — de terugknoppen blijven gewoon werken.
+    </div>
+    <div class="eyebrow"><span>Weergave</span></div>
+    <div class="chips" style="margin-bottom:20px">
+      ${[['auto','Auto'],['light','Daglicht'],['dark','Schoolbord']].map(([v,l])=>
+        `<button class="chip ${S.theme===v?'on':''}" data-theme="${v}">${l}</button>`).join('')}
+    </div>
+    <div class="eyebrow"><span>Versie</span></div>
+    <div class="sketch card" style="margin-bottom:10px">
+      <div class="row">
+        <div class="grow">
+          <div class="name hand">Panklaar ${APP_VERSIE}</div>
+          <div class="meta">Dit is de versie die op dit apparaat draait</div>
+        </div>
+      </div>
+    </div>
+    <button class="btn wide" id="app-update" style="margin-bottom:10px">${ic('spark','')} Nieuwste versie ophalen</button>
+    <div class="muted" style="font-size:14px;margin:0 4px 20px;line-height:1.45">
+      Werkt iets niet zoals beschreven? Dan houdt je telefoon waarschijnlijk een oudere versie vast. Deze knop haalt de nieuwste op; je recepten, lijst en instellingen blijven gewoon staan.
+    </div>
+    <div class="sketch card" style="margin-bottom:20px">
+      <div class="muted" style="font-size:17px;line-height:1.45">
+        ${S.recipes.length} recepten · ${S.pantry.length} in voorraad · ${S.shopping.length} op de lijst.
+        Alles blijft op dit apparaat.
+      </div>
+    </div>` : ''}
+
+    ${opslagOk ? '' : `
+    <div class="eyebrow"><span>Opslag werkt niet</span></div>
+    <div class="sketch card" style="margin-bottom:20px">
+      <div style="font-size:17px;line-height:1.45">
+        Deze telefoon of browser bewaart niets van Panklaar. Alles wat je nu invult is weg zodra je de app sluit.
+        Dat komt meestal door een privévenster, of doordat de opslag vol zit. Open Panklaar in een gewoon venster,
+        of maak ruimte vrij, en probeer het opnieuw.
+      </div>
+    </div>` }
+    ${WHISK_SPOON_DRAWING}
+  `;
+}
+
+function familyCard(m){
+  const R = memberRules(m);
+  const tags = (m.stages||[]).filter(x=>x!=='none').map(stageLabel);
+  const n = R.avoid.length + R.limit.length;
+  return `<div class="sketch card" style="${m.eat?'':'opacity:.55'}">
+    <div class="row">
+      <button class="tickbox ${m.eat?'on':''}" data-eat="${m.id}" aria-label="Eet mee">${ic('check','')}</button>
+      <div class="grow" data-member="${m.id}" style="cursor:pointer">
+        <div class="name hand">${esc(m.name)}</div>
+        <div class="meta">${tags.length?esc(tags.join(' · ')):'Geen bijzonderheden'}${n?` · ${n} regels`:''}</div>
+      </div>
+      <button class="icon-btn" data-memberedit="${m.id}" aria-label="Bewerken">${ic('edit','')}</button>
+    </div>
+  </div>`;
+}
+
+function viewMember(id){
+  const m = S.family.find(x=>x.id===id);
+  if(!m) return viewProfile();
+  const R = memberRules(m);
+  const sect = (title, items) => items.length ? `
+    <div class="eyebrow"><span>${title}</span></div>
+    <div class="sketch card">
+      ${items.map(x=>`<div class="step"><span class="n">·</span><span class="tx">${esc(x)}</span></div>`).join('')}
+    </div>` : '';
+  const alg = memberAllergies(m);
+  const tags = (m.stages||[]).map(stageLabel).join(' · ') || 'Geen bijzonderheden';
+  const empty = !R.avoid.length && !R.limit.length && !R.ok.length && !R.notes.length && !alg.length && !m.ai;
+  return `
+    <div class="detail-top">
+      <button class="back" data-tab="profile" aria-label="Terug">${ic('back','')}</button>
+      <button class="icon-btn" data-memberedit="${m.id}" aria-label="Gezinslid bewerken">${ic('edit','')}</button>
+    </div>
+    <h1 class="title hand" style="font-size:36px;margin-top:6px">${esc(m.name)}</h1>
+    <p class="subtitle">${esc(tags)}${alg.length?` · allergie: ${esc(alg.join(', '))}`:''}${m.note?` — ${esc(m.note)}`:''}${m.eat?'':' · eet niet mee'}</p>
+    ${sect('Niet eten', R.avoid)}
+    ${sect('Beperken', R.limit)}
+    ${sect('Let op / mag wel', R.ok)}
+    ${R.notes.map(x=>`<div class="sketch card"><div class="muted" style="font-size:16px;line-height:1.45">${esc(x)}</div></div>`).join('')}
+    ${empty?`<div class="sketch card"><div class="muted" style="font-size:17px">Geen bijzondere voedingsregels.</div></div>`:''}
+    ${R.srcs.length?`<p class="muted" style="font-size:15px;margin:6px 4px 10px">Bron: ${esc(R.srcs.join(' · '))}</p>`:''}
+    ${alg.length ? `
+    <div class="eyebrow"><span>Allergie</span></div>
+    <div class="sketch card">
+      ${alg.map(x=>`<div class="step"><span class="n">·</span><span class="tx">${esc(x)}</span></div>`).join('')}
+    </div>
+    <div class="muted" style="font-size:14px;margin:0 4px 14px;line-height:1.45">Dit gaat als harde eis mee bij het bedenken én het inladen van recepten, en komt als waarschuwing terug als het er toch in staat.</div>` : ''}
+    ${m.ai ? `
+    <div class="eyebrow"><span>Wat de AI opzocht</span></div>
+    ${sect('Niet eten (AI)', m.ai.avoid||[])}
+    ${sect('Beperken (AI)', m.ai.limit||[])}
+    ${sect('Let op (AI)', m.ai.ok||[])}
+    ${(m.ai.bronnen||[]).length ? `<p class="muted" style="font-size:15px;margin:6px 4px 10px">Bron: ${esc(m.ai.bronnen.join(' · '))}</p>` : ''}` : ''}
+    <button class="btn wide" data-research="${m.id}" style="margin-bottom:14px">
+      ${ic('spark','')} ${researching===m.id ? 'Bezig met uitzoeken…' : (m.ai ? 'Opnieuw laten uitzoeken' : 'Laat de AI uitzoeken wat geldt')}
+    </button>
+    <div class="sketch soft card">
+      <div class="muted" style="font-size:15px;line-height:1.45">${NUTRI_DISCLAIMER}</div>
+    </div>
+  `;
+}
+
+function viewMemberEdit(id){
+  const m = id!=='new' ? S.family.find(x=>x.id===id) : null;
+  const d = m || {name:'', stages:[], eat:true, note:'', allergies:[], allergyText:''};
+  return `
+    <div class="detail-top">
+      <button class="back" data-tab="profile" aria-label="Terug">${ic('back','')}</button>
+      <span class="h hand">${m?'Gezinslid bewerken':'Nieuw gezinslid'}</span>
+      <span style="width:28px"></span>
+    </div>
+    <div class="field" style="margin-top:14px">
+      <label for="m-name">Naam</label>
+      <input class="inp" id="m-name" value="${esc(d.name)}" placeholder="Naam">
+    </div>
+    <div class="field">
+      <label>Situatie — meerdere mogelijk</label>
+      <div class="chips" id="m-stages">
+        ${STAGES.map(st=>`<button class="chip ${d.stages.includes(st.id)?'on':''}" data-stage="${st.id}">${st.label}</button>`).join('')}
+      </div>
+    </div>
+    <div class="field">
+      <label>Allergie — meerdere mogelijk</label>
+      <div class="chips" id="m-allergies">
+        ${ALLERGENS.map(a=>`<button class="chip ${(d.allergies||[]).includes(a.id)?'on':''}" data-allergen="${a.id}">${a.label}</button>`).join('')}
+      </div>
+    </div>
+    <div class="field">
+      <label for="m-allergytext">Andere allergie of iets wat hij/zij niet verdraagt</label>
+      <input class="inp" id="m-allergytext" value="${esc(d.allergyText||'')}" placeholder="bijv. kiwi, blauwe bessen">
+    </div>
+    <div class="field">
+      <label for="m-note">Notitie (optioneel)</label>
+      <input class="inp" id="m-note" value="${esc(d.note||'')}" placeholder="bijv. leeftijd of allergie">
+    </div>
+    <div class="sketch soft list-item" style="margin-bottom:16px">
+      <button class="tickbox ${d.eat?'on':''}" id="m-eat" aria-label="Eet mee">${ic('check','')}</button>
+      <span class="grow">Eet mee — telt mee bij recepten zoeken</span>
+    </div>
+    <button class="btn fill wide" data-savemember="${m?m.id:'new'}">${ic('check','')} Gezinslid opslaan</button>
+    ${m?`<button class="btn ghost wide" data-memberdel="${m.id}" style="margin-top:10px">${ic('trash','')} Gezinslid verwijderen</button>`:''}
+  `;
+}
+
+/* kop van een uitklapbaar vakje bij Jij */
+function vakKop(k, titel, onder){
+  return `<div class="sketch card" data-vak="${k}" style="cursor:pointer;margin-bottom:14px">
+    <div class="row">
+      <div class="grow"><div class="name hand">${esc(titel)}</div><div class="meta">${esc(onder)}</div></div>
+      <span class="fam-chev ${vak(k)?'open':''}"><svg viewBox="0 0 24 24">${I.chev}</svg></span>
+    </div>
+  </div>`;
+}
+
+/* Wat de AI deze maand heeft gekost, en hoeveel er nog over is */
+function gebruikBlok(){
+  const k = maandNu(), m = maandVak(k), b = budget();
+  const deel = Math.min(100, Math.round(m.kosten / b * 100));
+  const over = Math.max(0, b - m.kosten);
+  const eerder = Object.keys(S.usage||{}).filter(x=>x!==k).sort().reverse().slice(0,3);
+  const totaal = Object.keys(S.usage||{}).reduce((n,x)=>n + (S.usage[x].kosten||0), 0);
+  return `
+    <div class="eyebrow"><span>AI-gebruik</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 10px;line-height:1.4">
+      Geschat op basis van wat de AI per antwoord teruggeeft, voor <span class="hand">${esc(aiModel())}</span>. Je echte tegoed staat bij ${esc(dienst().merk)}.
+    </div>
+    <div class="sketch card">
+      <div class="row" style="align-items:flex-end;margin-bottom:8px">
+        <div class="grow">
+          <div class="meta">${esc(maandLabel(k))}</div>
+          <div class="name hand" style="font-size:30px">${dollar(m.kosten)}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="meta">nog over</div>
+          <div class="name hand" style="font-size:22px">${dollar(over)}</div>
+        </div>
+      </div>
+      <div class="balk"><span style="width:${deel}%"></span></div>
+      <div class="meta" style="margin-top:6px">${deel}% van ${dollar(b)} · ${m.calls} ${m.calls===1?'aanvraag':'aanvragen'}</div>
+      <div class="stat-grid" style="margin-top:12px">
+        <div class="stat"><div class="k">Tokens in</div><div class="v hand" style="font-size:20px">${getal(m.in + m.cw + m.cr)}</div></div>
+        <div class="stat"><div class="k">Tokens uit</div><div class="v hand" style="font-size:20px">${getal(m.out)}</div></div>
+        <div class="stat"><div class="k">Zoekacties</div><div class="v hand" style="font-size:20px">${m.zoek}</div></div>
+      </div>
+    </div>
+    <div class="field" style="margin-bottom:10px">
+      <label for="ai-budget">Maandbedrag in dollars</label>
+      <div class="split">
+        <input class="inp" id="ai-budget" type="number" inputmode="decimal" min="1" step="1" value="${b}" style="flex:1">
+        <button class="btn fill" id="ai-budget-save" aria-label="Bedrag opslaan">${ic('check','')}</button>
+      </div>
+    </div>
+    <div class="muted" style="font-size:14px;margin:0 4px 10px;line-height:1.45">
+      Je krijgt één melding als er nog 20% over is en één als er nog 10% over is. Elke nieuwe maand begint opnieuw.
+    </div>
+    ${eerder.length ? `
+    <div class="sketch soft card" style="margin-bottom:10px">
+      ${eerder.map(x=>`<div class="step"><span class="n">·</span><span class="tx">${esc(maandLabel(x))} — ${dollar(S.usage[x].kosten||0)} in ${S.usage[x].calls||0} ${(S.usage[x].calls||0)===1?'aanvraag':'aanvragen'}</span></div>`).join('')}
+      <div class="step"><span class="n">·</span><span class="tx">Alles bij elkaar: <span class="hand">${dollar(totaal)}</span></span></div>
+    </div>` : ''}
+    <div class="muted" style="font-size:13px;margin:0 4px 10px;line-height:1.45">${PRIJS_NOOT}</div>
+    <button class="btn ghost wide" id="ai-usage-reset" style="margin-bottom:20px">${ic('trash','')} Tellerstand wissen</button>`;
+}
+
+/* voedingsregels van alle mee-eters, samengevoegd, voor de AI-prompt */
+function familyPrompt(members){
+  const fam = members || (S.family||[]).filter(m=>m.eat);
+  if(!fam.length) return '';
+  const avoid=[], limit=[];
+  fam.forEach(m=>{ const R=memberRules(m);
+    R.avoid.forEach(x=>{ if(!avoid.includes(x)) avoid.push(x); });
+    R.limit.forEach(x=>{ if(!limit.includes(x)) limit.push(x); }); });
+  /* wat de AI eerder per persoon uitzocht telt net zo hard mee */
+  fam.forEach(m=>{
+    const A = (m.ai && m.ai.avoid) || [];
+    const L = (m.ai && m.ai.limit) || [];
+    A.forEach(x=>{ const v = `${x} (${m.name})`; if(!avoid.includes(v)) avoid.push(v); });
+    L.forEach(x=>{ const v = `${x} (${m.name})`; if(!limit.includes(v)) limit.push(v); });
+  });
+  const alg = fam.map(m=>{ const a = memberAllergies(m); return a.length ? `${m.name}: ${a.join(', ')}` : null; }).filter(Boolean);
+  const algLine = alg.length ? `\nALLERGIEËN — deze ingrediënten mogen er in geen enkele vorm in, ook niet als spoor of in een saus, bouillon of kant-en-klaar product: ${alg.join('; ')}. Kies een alternatief en noem dat in het recept.` : '';
+  const who = fam.map(m=>{ const st=(m.stages||[]).filter(x=>x!=='none').map(stageLabel);
+    const a = memberAllergies(m);
+    return `${m.name}${st.length?` (${st.join(', ')})`:''}${a.length?` — allergie: ${a.join(', ')}`:''}`; }).join('; ');
+  if(!avoid.length && !limit.length && !algLine) return `\nWie eet mee: ${who}.`;
+  return `
+Houd je STRIKT aan deze voedingsregels. Ze volgen de richtlijnen van gerenommeerde instituties (Voedingscentrum, RIVM, WHO). Kies of pas het gerecht zo aan dat het veilig is voor iedereen die mee-eet. Verzin geen regels buiten deze lijst.
+Wie eet mee: ${who}.
+NIET gebruiken: ${avoid.join('; ')||'—'}.
+BEPERKEN: ${limit.join('; ')||'—'}.${algLine}
+Bevat een klassiek recept iets wat niet mag, geef dan een veilig alternatief in het recept zelf.`;
+}
+
+function equipPrompt(){
+  const on = EQUIPMENT.filter(e=>(S.equip||[]).includes(e.id)).map(e=>e.label);
+  if(!on.length) return '';
+  return `Beschikbare keukenapparatuur: ${on.join(', ')}. Ga uit van alleen deze apparatuur; stel geen stappen voor die andere toestellen vereisen.\n`;
+}
+function prefsPrompt(flags){
+  flags = flags || [];
+  const p = S.prefs || {};
+  const freq = `Weekdoel (verdeel over de week, geen harde eis): groente ~${p.veg??0} van 7 dagen, vis ~${p.fish??0} van 7, vlees ~${p.meat??0} van 7 — kies een gerecht dat hierbij past.`;
+  const hints = flags.map(id=>{ const f=PREF_FLAGS.find(x=>x.id===id); return f?f.hint:null; }).filter(Boolean);
+  let extra = hints.length ? ` Let op deze voorkeuren: ${hints.join('; ')}.` : '';
+  if(flags.includes('weer')){
+    const maand = ['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'][new Date().getMonth()];
+    extra += ` Het is nu ${maand}; kies iets dat bij dit seizoen past.`;
+  }
+  return `${freq}${extra}\n`;
+}
+
+function openAsk(){
+  ask = { meal:'dinner', who:(S.family||[]).filter(m=>m.eat).map(m=>m.id), prefs:[...((S.prefs&&S.prefs.flags)||[])], count:(S.prefs&&S.prefs.count)||3, main:[], extra:'', level:prefLevel() };
+  $('ask').classList.add('on'); renderAsk();
+}
+function closeAsk(){ $('ask').classList.remove('on'); }
+function renderAsk(){
+  const typed = document.getElementById('ask-extra');
+  if(typed) ask.extra = typed.value;   /* niet kwijtraken bij het hertekenen */
+  const MEALS = [['breakfast','Ontbijt'],['lunch','Lunch'],['lunchtogo','Lunch to go'],['dinner','Diner']];
+  $('ask').querySelector('.sheet-card').innerHTML = `
+    <div class="cook-head" style="margin-bottom:10px">
+      <span class="h hand" style="font-size:27px">Wat zullen we koken?</span>
+      <button class="back" id="askClose" aria-label="Sluiten"><svg viewBox="0 0 24 24"><path d="M18.4 5.4 5.7 18.3M5.5 5.6l12.9 12.7"/></svg></button>
+    </div>
+    <div class="field"><label>Maaltijd</label>
+      <div class="chips">${MEALS.map(([id,l])=>`<button class="chip ${ask.meal===id?'on':''}" data-ask-meal="${id}">${l}</button>`).join('')}</div>
+    </div>
+    <div class="field"><label>Wie eet mee</label>
+      <div class="chips">${(S.family||[]).length ? S.family.map(m=>`<button class="chip ${ask.who.includes(m.id)?'on':''}" data-ask-who="${m.id}">${esc(m.name)}</button>`).join('') : `<span class="muted" style="font-size:16px">Nog geen gezinsleden</span>`}</div>
+    </div>
+    <div class="field"><label for="ask-extra">Waar heb je zin in?</label>
+      <input class="inp" id="ask-extra" placeholder="bijv. iets met pasta, zonder saus" value="${esc(ask.extra||'')}">
+    </div>
+    <div class="field"><label>Voorkeur</label>
+      <div class="chips">${PREF_FLAGS.map(f=>`<button class="chip ${ask.prefs.includes(f.id)?'on':''}" data-ask-pref="${f.id}">${f.label}</button>`).join('')}</div>
+    </div>
+    <div class="field"><label>Hoofdingrediënt</label>
+      <div class="chips">${MAIN_ING.map(m=>`<button class="chip ${ask.main.includes(m.id)?'on':''}" data-ask-main="${m.id}">${m.label}</button>`).join('')}</div>
+    </div>
+    <div class="field"><label>Kookniveau</label>
+      <div class="chips">${LEVEL_CHOICES.map(([v,l])=>`<button class="chip ${ask.level===v?'on':''}" data-ask-level="${v}">${l}</button>`).join('')}</div>
+    </div>
+    <div class="field"><label>Hoeveel recepten</label>
+      <div class="chips">${[1,2,3,4,5].map(n=>`<button class="chip ${ask.count===n?'on':''}" data-ask-count="${n}">${n}</button>`).join('')}</div>
+    </div>
+    <button class="btn fill wide" id="askGo">${ic('spark','')} ${ask.count===1?'Bedenk recept':`Bedenk ${ask.count} recepten`}</button>
+  `;
+}
+
+/* Wat geldt er voor déze persoon? De AI zoekt het op bij de instituties
+   en we bewaren het bij het gezinslid, zodat elk recept het meeneemt. */
+let researching = '';
+async function researchMember(id){
+  const m = S.family.find(x=>x.id===id); if(!m) return;
+  if(!aiKey()){ toast('Daarvoor heb ik een AI-sleutel nodig'); return; }
+  researching = id; if(S.view === 'member') render();
+  toast(`Uitzoeken wat geldt voor ${m.name}…`);
+  const st = (m.stages||[]).filter(x=>x!=='none').map(stageLabel);
+  const alg = memberAllergies(m);
+  const prompt = `Zoek uit welke voedingsregels gelden voor deze persoon, zodat ik daar bij het koken rekening mee houd.
+Persoon: ${m.name}${st.length?` — situatie: ${st.join(', ')}`:''}${alg.length?` — allergie: ${alg.join(', ')}`:''}${m.note?` — notitie: ${m.note}`:''}.
+Ga uit van gerenommeerde instituties: Voedingscentrum, RIVM, NVWA, het Nederlands Anafylaxis Netwerk en de WHO. Gebruik alleen wat daar staat en verzin niets.
+Schrijf in het Nederlands, per punt één korte zin, concreet over eten (ingrediënten, bereiding, hoeveelheden). Geen medisch advies, geen supplementen, geen algemene leefstijltips.
+Antwoord met UITSLUITEND geldige JSON, geen markdown:
+{"avoid":["wat deze persoon niet mag eten"],"limit":["wat beperkt moet blijven"],"ok":["waar je juist op kunt letten of wat juist goed is"],"bronnen":["Voedingscentrum — ..."]}`;
+  try{
+    const req = {model:AI_MODEL, max_tokens:1500, messages:[{role:'user', content:prompt}]};
+    if(aiOn('search')) req.tools = [{type:'web_search_20260209', name:'web_search', max_uses:3}];
+    const txt = await aiRequest(req);
+    const d = JSON.parse(extractJson(txt));
+    const cur = S.family.find(x=>x.id===id);
+    if(cur){
+      cur.ai = {
+        avoid:(d.avoid||[]).map(String), limit:(d.limit||[]).map(String),
+        ok:(d.ok||[]).map(String), bronnen:(d.bronnen||[]).map(String), when:Date.now()
+      };
+      await persist();
+      toast(`Klaar: regels voor ${cur.name} bijgewerkt`);
+    }
+  }catch(e){
+    lastAiError = e.message || String(e);
+    toast(`Uitzoeken mislukt: ${lastAiError}`);
+  }
+  researching = ''; render();
+}
+
+/* Eén keer waarschuwen bij 20% over, en één keer bij 10% over. Per maand,
+   want daar loopt het budget ook per maand. */
+function letOpBudget(){
+  const m = maandVak(maandNu()), b = budget();
+  const overPct = Math.max(0, (1 - m.kosten / b) * 100);
+  const grens = overPct <= 10 ? 10 : (overPct <= 20 ? 20 : 0);
+  if(!grens || m.gewaarschuwd.indexOf(grens) >= 0) return;
+  m.gewaarschuwd.push(grens);
+  /* val je in één keer door beide grenzen, dan alleen de laagste melden */
+  if(grens === 10 && m.gewaarschuwd.indexOf(20) < 0) m.gewaarschuwd.push(20);
+  persist();
+  toonBudgetMelding(grens, m, b);
+}
+function toonBudgetMelding(grens, m, b){
+  const over = Math.max(0, b - m.kosten);
+  $('warn').querySelector('.sheet-card').innerHTML = `
+    <div class="cook-head" style="margin-bottom:10px">
+      <span class="h hand" style="font-size:27px">Nog ${grens}% over</span>
+      <button class="back" id="warnClose" aria-label="Sluiten"><svg viewBox="0 0 24 24"><path d="M18.4 5.4 5.7 18.3M5.5 5.6l12.9 12.7"/></svg></button>
+    </div>
+    <p class="subtitle" style="margin:0 0 14px">Je hebt deze maand ${dollar(m.kosten)} van je ${dollar(b)} gebruikt. Er is nog ongeveer ${dollar(over)} over.</p>
+    <div class="sketch card">
+      <div class="step"><span class="n">·</span><span class="tx">Zet <span class="hand">Recepten opzoeken</span> uit bij Voorkeuren als je goedkoper wilt werken — zoeken is het duurste onderdeel.</span></div>
+      <div class="step"><span class="n">·</span><span class="tx">Vraag om minder recepten tegelijk in de pop-up.</span></div>
+      <div class="step"><span class="n">·</span><span class="tx">Verhoog je maandbedrag bij <span class="hand">Jij → AI-gebruik</span> als dit gewoon klopt.</span></div>
+    </div>
+    <button class="btn fill wide" id="warnGo" style="margin-top:4px">${ic('user','')} Naar AI-gebruik</button>
+    <button class="btn ghost wide" id="warnOk" style="margin-top:10px">Begrepen</button>
+    <div class="muted" style="font-size:13px;margin:12px 4px 0;line-height:1.45">
+      Dit is een schatting op basis van de tokens die de AI teruggeeft. Je echte tegoed staat bij de dienst zelf.
+    </div>`;
+  $('warn').classList.add('on');
+}
+
+/* Eén bestand met alles erin. De AI-sleutel gaat er bewust niet in: die
+   hoort bij dit apparaat en heeft in een back-up niets te zoeken. */
+async function backupTekst(){return PanklaarSecurity.backup(pack());}
+async function maakBackup(){
+  const txt=await backupTekst();
+  const naam = `panklaar-${new Date().toISOString().slice(0,10)}.json`;
+  /* op een telefoon is delen handiger dan downloaden: dan kun je hem in
+     Bestanden of iCloud zetten, of naar jezelf mailen */
+  try{
+    if(navigator.canShare && window.File){
+      const bestand = new File([txt], naam, {type:'application/json'});
+      if(navigator.canShare({files:[bestand]})){
+        await navigator.share({files:[bestand], title:'Panklaar back-up'});
+        toast('Back-up gedeeld'); return;
+      }
+    }
+  }catch(e){
+    if(e && e.name === 'AbortError') return;
+  }
+  try{
+    const url = URL.createObjectURL(new Blob([txt], {type:'application/json'}));
+    const a = document.createElement('a');
+    a.href = url; a.download = naam;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 8000);
+    toast(`Back-up gemaakt: ${naam}`);
+  }catch(e){
+    toast('Back-up maken lukte niet op dit apparaat');
+  }
+}
+/* eerst laten zien wat erin zit, dan pas terugzetten */
+async function backupInlezen(file){
+  let d;try{d=await PanklaarSecurity.readBackup(file);if(d===null)return;}
+  catch(e){toast(e.message||'Ongeldig back-upbestand');return;}
+  openMenu('Terugzetten?',[
+    {label:`Dit bestand bevat ${d.recipes.length} recepten en ${d.family.length} gezinsleden. Terugzetten vervangt je huidige gegevens.`,info:true},
+    {label:'Ja, alles vervangen',icon:'check',gevaar:true,doe:async()=>{
+      closeMenu();restoring=true;document.getElementById('screen').inert=true;document.getElementById('nav').inert=true;
+      try{await PanklaarSecurity.flush();if(!await saveData(d))throw new Error('Opslaan mislukt. Je eerdere opgeslagen gegevens blijven behouden.');Object.assign(S,d);applyTheme();go('recipes');catchUpTimers();toast('Back-up veilig teruggezet');}
+      catch(e){toast(e.message);}finally{restoring=false;document.getElementById('screen').inert=false;document.getElementById('nav').inert=false;}
+    }},
+    {label:'Nee, laten zoals het is',icon:'back',doe:closeMenu}
+  ]);
+}
+
+/* De telefoon dwingen de nieuwste versie op te halen. Alleen de opslag van
+   de app-bestanden gaat weg; recepten en instellingen staan in IndexedDB
+   en blijven staan. */
+async function haalNieuwsteVersie(){
+  toast('Nieuwste versie ophalen…');
+  try{
+    if(navigator.serviceWorker){
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r=>r.unregister()));
+    }
+  }catch(e){}
+  try{
+    if(window.caches){
+      const ks = await caches.keys();
+      await Promise.all(ks.map(k=>caches.delete(k)));
+    }
+  }catch(e){}
+  const schoon = location.pathname + '?v=' + Date.now();
+  setTimeout(()=>{ location.replace(schoon); }, 300);
+}
+
+/* Klein keuzemenu — voor de foto en voor lang indrukken op een recept */
+let menuData = null;
+/* op de donkere rand tikken sluit de pop-up */
+['menu','care','warn'].forEach(id=>{
+  const laag = document.getElementById(id);
+  if(laag) laag.addEventListener('click', e=>{
+    if(e.target !== laag) return;
+    if(id === 'menu') closeMenu();
+    else { laag.classList.remove('on'); if(id === 'care') careAsk = null; }
+  });
+});
+
+function openMenu(titel, items){
+  menuData = {titel, items};
+  $('menu').querySelector('.sheet-card').innerHTML = `
+    <div class="cook-head" style="margin-bottom:12px">
+      <span class="h hand" style="font-size:25px">${esc(titel)}</span>
+      <button class="back" id="menuClose" aria-label="Sluiten"><svg viewBox="0 0 24 24"><path d="M18.4 5.4 5.7 18.3M5.5 5.6l12.9 12.7"/></svg></button>
+    </div>
+    ${items.map((it,i)=> it.info
+      ? `<div class="sketch soft card" style="margin-bottom:10px">
+          <div class="muted" style="font-size:16px;line-height:1.45">${esc(it.label)}</div>
+        </div>`
+      : `<button class="menu-item ${it.gevaar?'gevaar':''}" data-menu="${i}">
+      <svg class="ic" viewBox="0 0 24 24">${I[it.icon] || I.chev}</svg>
+      <span>${esc(it.label)}</span>
+    </button>`).join('')}`;
+  $('menu').classList.add('on');
+}
+function closeMenu(){ $('menu').classList.remove('on'); menuData = null; }
+
+/* de foto van een recept: zelf kiezen, laten maken, bekijken of weghalen */
+let fotoVoor = null;
+function fotoMenu(id){
+  const r = S.recipes.find(x=>x.id===id); if(!r) return;
+  fotoVoor = id;
+  const items = [];
+  if(r.foto) items.push({label:'Foto groot bekijken', icon:'camera', doe:()=>{ closeMenu(); toonReceptFoto(r.id); }});
+  items.push({label: r.foto ? 'Andere foto kiezen' : 'Foto kiezen of maken', icon:'camera',
+    doe:()=>{ closeMenu(); $('rec-foto-input').click(); }});
+  items.push({label:'Laat de AI er een maken', icon:'spark', doe:async ()=>{
+    closeMenu();
+    const f = await fotoVanAi(r);
+    if(f){ r.foto = f; await persist(); render(); toast('Plaatje toegevoegd'); }
+  }});
+  if(r.foto) items.push({label:'Foto weghalen', icon:'trash', gevaar:true, doe:async ()=>{
+    closeMenu(); delete r.foto; await persist(); render(); toast('Foto weg');
+  }});
+  openMenu(r.name, items);
+}
+function toonReceptFoto(id){
+  const r = S.recipes.find(x=>x.id===id); if(!r || !r.foto) return;
+  openMenu(r.name, [{label:'Sluiten', icon:'back', doe:closeMenu}]);
+  const kaart = $('menu').querySelector('.sheet-card');
+  const beeld = document.createElement('img');
+  beeld.className = 'fotogroot'; beeld.src = r.foto; beeld.alt = `Foto van ${r.name}`;
+  kaart.insertBefore(beeld, kaart.children[1]);
+}
+/* lang indrukken op een recept: bewerken, foto of weggooien */
+function receptMenu(id){
+  const r = S.recipes.find(x=>x.id===id); if(!r) return;
+  openMenu(r.name, [
+    {label:'Bekijken', icon:'book', doe:()=>{ closeMenu(); go('recipes','detail',id); maybeCare(id); }},
+    {label:'Bewerken', icon:'edit', doe:()=>{ closeMenu(); go('recipes','edit',id); }},
+    {label:'Foto', icon:'camera', doe:()=>{ closeMenu(); fotoMenu(id); }},
+    {label:'Verwijderen', icon:'trash', gevaar:true, doe:async ()=>{
+      closeMenu();
+      S.recipes = S.recipes.filter(x=>x.id!==id);
+      S.timers=(S.timers||[]).filter(x=>x.recipeId!==id);
+      Object.keys(S.plan).forEach(d=>{ if(S.plan[d]===id) delete S.plan[d]; });
+      await persist(); go('recipes'); toast(`${r.name} verwijderd`);
+    }}
+  ]);
+}
+
+let careAsk = null;
+function maybeCare(id){
+  const r = S.recipes.find(x=>x.id===id);
+  if(!r || r.careDone) return;
+  const found = careFindings(r);
+  if(!found.length){ r.careDone = true; persist(); return; }
+  careAsk = {recipeId:id, items:found};
+  $('care').classList.add('on');
+  renderCare();
+}
+function closeCare(){ $('care').classList.remove('on'); careAsk = null; }
+function renderCare(){
+  if(!careAsk) return;
+  $('care').querySelector('.sheet-card').innerHTML = `
+    <div class="cook-head" style="margin-bottom:10px">
+      <span class="h hand" style="font-size:27px">Even opletten</span>
+      <button class="back" id="careClose" aria-label="Sluiten"><svg viewBox="0 0 24 24"><path d="M18.4 5.4 5.7 18.3M5.5 5.6l12.9 12.7"/></svg></button>
+    </div>
+    <p class="subtitle" style="margin:0 0 14px">Dit recept raakt aan de voedingsregels van wie er mee-eet. Vink aan wat je in het recept wilt zetten; het komt dan ook in de kookstand terug.</p>
+    ${careAsk.items.map((c,ix)=>`<div class="sketch soft card" style="margin-bottom:10px">
+      <div class="step" style="align-items:flex-start">
+        <button class="tickbox ${c.on?'on':''}" data-careon="${ix}" aria-label="Verwerken">${ic('check','')}</button>
+        <span class="tx">
+          <span class="care-note" style="border:none;padding:0;margin:0;display:block">
+            <span class="who" style="display:block">Voor ${esc(c.who.join(' en '))}</span>
+            <span class="w" style="display:block">${esc(c.warn)}</span>
+            <span class="f" style="display:block">${esc(c.fix)}</span>
+          </span>
+        </span>
+      </div>
+    </div>`).join('')}
+    <button class="btn fill wide" id="careGo">${ic('check','')} In het recept zetten</button>
+    <button class="btn ghost wide" id="careSkip" style="margin-top:10px">Niet nu</button>
+    <div class="muted" style="font-size:13px;margin:12px 4px 0;line-height:1.45">
+      Volgens de richtlijnen van het Voedingscentrum. Geen medisch advies — overleg bij twijfel met je verloskundige, huisarts of het consultatiebureau.
+    </div>`;
+}
+
+/* Foto's kleiner maken voordat ze in de opslag gaan — anders staat er zo
+   een paar megabyte per recept in. */
+function schaalFoto(dataUrl, max, kwal){
+  max = max || 900; kwal = kwal || 0.82;
+  return new Promise((res, rej)=>{
+    const img = new Image();
+    img.onload = ()=>{
+      const f = Math.min(1, max / Math.max(img.width, img.height));
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(img.width * f); cv.height = Math.round(img.height * f);
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(img, 0, 0, cv.width, cv.height);
+      let klein = dataUrl;
+      try{ klein = cv.toDataURL('image/jpeg', kwal); }catch(e){}
+      /* kwam er een leeg vel terug (te weinig geheugen)? neem dan het origineel */
+      if(klein.length < 3000 && dataUrl.length > 6000) klein = dataUrl;
+      cv.width = cv.height = 1;
+      img.src = '';
+      res(klein);
+    };
+    img.onerror = ()=>rej(new Error('Die foto kon ik niet lezen'));
+    img.src = dataUrl;
+  });
+}
+/* Een foto van de telefoon inlezen. Safari geeft soms een HEIC-bestand dat
+   een gewone <img> niet aankan; createImageBitmap lukt dan meestal wel. */
+async function bestandNaarBeeld(file){
+  if(window.createImageBitmap){
+    try{ return await createImageBitmap(file); }catch(e){}
+  }
+  const url = URL.createObjectURL(file);
+  try{
+    return await new Promise((res, rej)=>{
+      const img = new Image();
+      img.onload = ()=>res(img);
+      img.onerror = ()=>rej(new Error('Deze foto kon ik niet openen. Probeer er een schermafbeelding van te maken en die te kiezen.'));
+      img.src = url;
+    });
+  } finally { setTimeout(()=>URL.revokeObjectURL(url), 4000); }
+}
+function beeldNaarJpeg(beeld, max, kwal){
+  max = max || 900; kwal = kwal || 0.82;
+  const bw = beeld.width || beeld.naturalWidth, bh = beeld.height || beeld.naturalHeight;
+  if(!bw || !bh) throw new Error('Deze foto kwam leeg binnen.');
+  const f = Math.min(1, max / Math.max(bw, bh));
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(bw * f); cv.height = Math.round(bh * f);
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.drawImage(beeld, 0, 0, cv.width, cv.height);
+  const uit = cv.toDataURL('image/jpeg', kwal);
+  cv.width = cv.height = 1;
+  if(beeld.close) try{ beeld.close(); }catch(e){}
+  /* een leeg vel (te weinig geheugen) is klein; een echt klein plaatje ook,
+     dus alleen klagen als het origineel wél groot was */
+  if(uit.length < 3000 && bw * bh > 40000) throw new Error('Deze foto kwam leeg binnen. Probeer een andere foto.');
+  return uit;
+}
+async function bestandNaarFoto(file, max){
+  if(!file||file.size>20*1024*1024)throw new Error("Foto te groot (maximaal 20 MB)");
+  return PanklaarSecurity.photo(beeldNaarJpeg(await bestandNaarBeeld(file), max || 900, 0.82));
+}
+
+/* Een plaatje láten maken kan alleen bij OpenAI; Claude maakt geen beelden. */
+async function fotoVanAi(r){
+  if(dienstId() !== 'openai'){
+    toast('Plaatjes maken kan alleen met OpenAI — kies die bij Jij → AI-dienst');
+    return null;
+  }
+  if(!aiKey()){ toast('Vul eerst je OpenAI-sleutel in bij Jij'); return null; }
+  try{allowAI();}catch{return null;}
+  toast('Plaatje maken…');
+  const prompt = `Een smakelijke foto van dit gerecht, van bovenaf op een eenvoudig bord, daglicht, geen tekst en geen mensen: ${r.name}. Belangrijkste ingrediënten: ${(r.ingredients||[]).slice(0,6).join(', ')}.`;
+  let res;
+  try{
+    res = await fetch('https://api.openai.com/v1/images/generations', {
+      method:'POST', headers:aiHeaders(),
+      body: JSON.stringify({model:'gpt-image-1', prompt, size:'1024x1024', quality:'low', n:1}),signal:klokSignaal()
+    });
+  }catch(e){ toast('Geen verbinding met OpenAI'); return null; }
+  let data;
+  try{ data = await res.json(); }catch(e){ data = null; }
+  if(!res.ok || !data || data.error || !data.data || !data.data[0]){
+    lastAiError = (data && data.error && data.error.message) || `status ${res.status}`;
+    toast(lastAiError); return null;
+  }
+  const d = data.data[0];
+  const ruw=d.b64_json?`data:image/png;base64,${d.b64_json}`:null;
+  if(!ruw){ toast('Geen plaatje teruggekregen'); return null; }
+  /* het plaatje telt mee in het kostenoverzicht */
+  const m = maandVak(maandNu());
+  m.calls += 1; m.kosten += PRIJS_BEELD;
+  try{ return await schaalFoto(ruw, 900, 0.85); }catch(e){ return ruw; }
+}
+
+/* Een foto van een telefoon is al gauw vijf megabyte. Drie daarvan in één
+   aanvraag komt niet aan — de verbinding klapt eruit voordat er een antwoord
+   is. Daarom eerst verkleinen; tekst op een bladzijde blijft goed leesbaar. */
+async function fileToB64(file, max){
+  const klein = beeldNaarJpeg(await bestandNaarBeeld(file), max || 1400, 0.85);
+  const m = /data:(.*?);base64,(.*)$/.exec(klein);
+  if(!m) throw new Error('Deze foto kon ik niet klaarzetten.');
+  return {media_type:m[1], data:m[2]};
+}
+const mB = txt => Math.round(String(txt).length / 1024 / 1024 * 10) / 10;
+async function scanPantry(file){
+  toast('Foto wordt bekeken…');
+  let img;
+  try{ img = await fileToB64(file, 1100); }catch(e){ toast(e.message || 'Kon de foto niet lezen'); return; }
+  try{
+    const txt = await aiRequest({ model:AI_MODEL, max_tokens:600, messages:[{role:'user', content:[
+      {type:'image', source:{type:'base64', media_type:img.media_type, data:img.data}},
+      {type:'text', text:'Dit is een foto van eten of voorraad. Noem de herkenbare, eetbare ingrediënten die je ziet. Antwoord met UITSLUITEND een JSON-array van korte Nederlandse namen, enkelvoud en kleine letters, geen merken of verpakkingen. Voorbeeld: ["ei","tomaat","kaas"].'}
+    ]}] });
+    const items = JSON.parse(extractJson(txt));
+    let added = 0;
+    items.forEach(x=>{ const v = String(x).trim().toLowerCase(); if(v && !S.pantry.includes(v)){ S.pantry.push(v); added++; } });
+    await persist(); render();
+    toast(added ? `${added} toegevoegd uit de foto` : 'Niks nieuws gevonden');
+  }catch(e){
+    lastAiError = e.message || String(e);
+    toast(`Foto: ${lastAiError}`);
+  }
+}
+
+function viewImport(){
+  return `
+    <div class="detail-top">
+      <button class="back" data-tab="recipes" aria-label="Terug">${ic('back','')}</button>
+      <span class="h hand">Recept inladen</span>
+      <span style="width:28px"></span>
+    </div>
+    <p class="subtitle" style="margin-top:6px">Voeg een foto toe of plak een recept, schrijf er eventueel iets bij, en maak er daarna jouw recept van.</p>
+    <div class="eyebrow"><span>1 · Van een foto</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">
+      Een bladzijde uit een kookboek, een tijdschrift, een kaartje of je eigen handschrift. Loopt het recept over twee pagina's? Voeg dan meerdere foto's toe (maximaal drie). Er gebeurt nog niets — dat doe je zo zelf.
+    </div>
+    ${impFotos.length ? `<div class="imp-fotos">
+      ${impFotos.map((f,i)=>`<div class="imp-foto">
+        <img src="data:${f.mt};base64,${f.data}" alt="foto ${i+1}" decoding="async" loading="eager">
+        <button class="imp-foto-x" data-fotorm="${i}" aria-label="Foto weghalen">×</button>
+      </div>`).join('')}
+    </div>` : ''}
+    <button class="btn ${impFotos.length?'':'fill'} wide" id="imp-foto-btn" style="margin-bottom:6px">
+      ${ic('camera','')} ${impFotos.length ? 'Nog een foto toevoegen' : 'Foto toevoegen'}
+    </button>
+    <input type="file" accept="image/*" multiple id="imp-foto" class="bestandveld" aria-hidden="true" tabindex="-1">
+    ${DIVIDER}
+    <div class="eyebrow"><span>2 · Of plak een recept</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">
+      De hele tekst of alleen de link. Heb je een foto toegevoegd, dan mag dit ook leeg blijven — of je zet er iets bij wat niet op de foto staat.
+    </div>
+    <div class="field">
+      <label for="imp-in">Recept of link</label>
+      <textarea class="inp" id="imp-in" rows="6" placeholder="https://…&#10;of plak hier de tekst van het recept">${esc(impText)}</textarea>
+    </div>
+    ${DIVIDER}
+    <div class="eyebrow"><span>3 · Erbij zetten</span></div>
+    <div class="field">
+      <label for="imp-titel">Titel (optioneel)</label>
+      <input class="inp" id="imp-titel" value="${esc(impTitel)}" placeholder="Appeltaart van oma">
+    </div>
+    <div class="field">
+      <label for="imp-tweak">Opmerking of wijziging (optioneel)</label>
+      <input class="inp" id="imp-tweak" value="${esc(impTweak)}" placeholder="met kip in plaats van zalm, voor 4 personen">
+    </div>
+    <div class="muted" style="font-size:14px;margin:-6px 4px 14px;line-height:1.45">
+      Bijvoorbeeld: zonder rozijnen · voor 4 personen · alleen het bovenste recept van de bladzijde.
+    </div>
+    <button class="btn fill wide" id="imp-go" style="margin-bottom:6px">${ic('spark','')} Maak er mijn recept van</button>
+    ${DIVIDER}
+    <div class="eyebrow"><span>Uit een bestand</span></div>
+    <div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">
+      Een receptbestand (.json) inladen gaat buiten de AI om — je hebt er geen sleutel voor nodig.
+    </div>
+    <button class="btn wide" id="imp-file-btn">${ic('inbox','')} Bestand kiezen</button>
+    <input type="file" accept=".json,.txt,application/json,text/plain" id="imp-file" class="bestandveld" aria-hidden="true" tabindex="-1">
+    ${BOARD_KNIFE_DRAWING}
+  `;
+}
+
+/* alles wat binnenkomt in dezelfde vorm gieten, dan naar het kijkscherm */
+function showCandidates(list){
+  let clean;
+  try{const input=Array.isArray(list)?list:[list];if(input.length>100)throw new Error();clean=input.map(r=>PanklaarSecurity.recipe(r,{newId:true}));}
+  catch(e){toast('Dit recept bevat ongeldige gegevens of een onveilige foto.');return false;}
+  if(!clean.length)return false;
+  suggestions=clean;picked=new Set(clean.map(r=>r.id));
+  if(clean.length===1)go('recipes','cand',clean[0].id);else go('recipes','picks');return true;
+}
+
+/* een receptbestand van je telefoon of laptop — hier komt geen AI aan te pas */
+function loadRecipeFile(f){
+  if(!f||f.size>8*1024*1024){toast("Receptbestand te groot (maximaal 8 MB)");return;}
+  const rd = new FileReader();
+  rd.onload = () => {
+    let data;
+    try{ data = JSON.parse(extractJson(String(rd.result))); }
+    catch(e){
+      /* geen receptbestand? zet de tekst dan in het vak, dan kan de AI het lezen */
+      impText = String(rd.result).slice(0, 6000);
+      render();
+      toast('Geen receptbestand — de tekst staat nu in het vak');
+      return;
+    }
+    const list = Array.isArray(data) ? data : (Array.isArray(data.recipes) ? data.recipes : data);
+    if(!showCandidates(list)) toast('Geen recept in dit bestand gevonden');
+  };
+  rd.onerror = () => toast('Bestand kon niet worden gelezen');
+  rd.readAsText(f);
+}
+
+/* het recept ophalen of uit de geplakte tekst vissen, en omzetten */
+/* De opdracht om iets naar mijn receptvorm om te zetten — voor geplakte
+   tekst, een link en een foto is die op één regel na hetzelfde. */
+function importPrompt(bronRegel, staart){
+  const tweak = impTweak.trim();
+  const titelNote = impTitel.trim() ? ` Noem het recept "${impTitel.trim()}".` : '';
+  const tweakNote = tweak ? ` Pas het recept aan volgens deze wens en verwerk dat overal — in de naam, de ingrediënten én de stappen: ${tweak}.` : '';
+  const tipsNote = aiOn('tips') ? ' Geef in "tips" twee tot vier suggesties voor extra ingrediënten of kruiden. Werk elke tip uit met "tekst", "ingredienten" (met hoeveelheid), "stap" en "na" (het stapnummer waarna die stap komt).' : '';
+  const uitlegNote = aiOn('uitleg') ? ' Leg in "uitleg" in twee tot vier zinnen uit hoe de belangrijkste techniek werkt en waarom je het zo doet.' : '';
+  const fam = familyPrompt();
+  const famNote = fam ? `${fam}
+Botst het originele recept met deze regels? Pas het dan aan zodat het wél kan — schrijf het veilige alternatief gewoon in de ingrediënten en de stappen — en zet in "letop" per aanpassing één zin: wat je veranderde en voor wie.` : '';
+  const extraFields = `${aiOn('tips') ? ',"tips":[{"tekst":"...","ingredienten":["1 el ..."],"stap":"...","na":3}]' : ''}${aiOn('uitleg') ? ',"uitleg":"..."' : ''}${fam ? ',"letop":["..."]' : ''}`;
+  return `Zet het recept om naar mijn eigen receptvorm.
+${bronRegel}
+Blijf trouw aan het origineel: dezelfde ingrediënten en dezelfde volgorde, tenzij ik hieronder om een wijziging vraag.${tweakNote}${titelNote}
+Schrijf in het Nederlands, tutoyeren. Maak van elke stap één korte, duidelijke zin met de tijden én de hoeveelheden erin, zodat ik hem tijdens het koken kan volgen. Zet hoeveelheden in het metrieke stelsel (g, ml, el, tl).${tipsNote}${uitlegNote}${famNote}
+${equipPrompt()}${staart || ''}
+Antwoord met UITSLUITEND geldige JSON, geen markdown:
+{"name":"","type":"dinner","mins":30,"serves":2,"level":"easy","ingredients":["..."],"steps":["..."]${extraFields}}
+"type" is een van: ${TYPES.map(t=>t.id).join(', ')}. "level" is easy, medium of hard.`;
+}
+
+/* wat er misging bij het inladen, netjes op het scherm */
+function importFout(e){
+  lastAiError = e.message || String(e);
+  const noKey = !aiKey();
+  $('screen').innerHTML = `<h1 class="title hand">${noKey ? 'AI-sleutel nodig' : 'Niet gelukt'}</h1>
+    <p class="subtitle">${noKey
+      ? `Om een recept in te laden heb ik je ${esc(dienst().merk)} API-sleutel nodig. Die vul je in bij Jij → AI-sleutel.`
+      : 'De AI-dienst gaf deze melding terug:'}</p>
+    ${noKey ? '' : `<div class="sketch card"><div class="tx" style="font-size:17px;line-height:1.45">${esc(lastAiError)}</div></div>`}
+    ${noKey ? `<button class="btn fill wide" data-tab="profile">${ic('user','')} Naar AI-sleutel</button>` : ''}
+    <button class="btn ghost wide" data-go="import" style="margin-top:10px">Terug naar inladen</button>`;
+}
+
+/* wat er in de velden staat vasthouden, want het scherm wordt hertekend */
+function leesImpVelden(){
+  if($('imp-in')) impText = $('imp-in').value;
+  if($('imp-tweak')) impTweak = $('imp-tweak').value.trim();
+  if($('imp-titel')) impTitel = $('imp-titel').value.trim();
+}
+/* gekozen foto's klaarzetten; omzetten doet de gebruiker zelf, later */
+async function voegFotosToe(files){
+  const lijst = [].slice.call(files);
+  if(!lijst.length) return;
+  leesImpVelden();
+  const ruimte = Math.max(0, 3 - impFotos.length);
+  if(!ruimte){ toast('Drie foto’s is het maximum'); return; }
+  toast(lijst.length === 1 ? 'Foto klaarzetten…' : 'Foto’s klaarzetten…');
+  /* één voor één: twee grote foto's tegelijk verkleinen loopt op een
+     telefoon uit z'n geheugen, en dan komt de tweede er leeg uit */
+  let fout = '';
+  for(const f of lijst.slice(0, ruimte)){
+    try{
+      const b = await fileToB64(f);
+      if(!b || !b.data) throw new Error('Deze foto kwam leeg binnen.');
+      impFotos.push({mt:'image/jpeg', data:b.data});
+    }catch(e){ fout = e.message || 'Deze foto kon ik niet lezen.'; }
+  }
+  render();
+  /* de melding als laatste, anders overschrijft 'klaar' de foutmelding */
+  if(fout) toast(fout);
+  else toast(`${impFotos.length} ${impFotos.length===1?'foto':'foto’s'} klaar — schrijf er eventueel iets bij`);
+}
+
+/* de foto's die klaarstaan laten overschrijven naar mijn receptvorm */
+async function importFoto(){
+  const beelden = impFotos.slice(0, 3);
+  if(!beelden.length) return;
+  const extra = impText.trim();
+  $('screen').innerHTML = `<h1 class="title hand">Even kijken…</h1>
+    <p class="subtitle">Ik lees ${beelden.length === 1 ? 'de foto' : `de ${beelden.length} foto's`} en schrijf het recept over in jouw vorm.</p>${PAN_DRAWING}`;
+  const bron = beelden.length === 1
+    ? 'Het staat op de foto hierbij — een bladzijde uit een kookboek of tijdschrift, een kaartje, een schermafbeelding of iets met de hand geschreven. Lees alles wat er staat, ook in de kantlijn.'
+    : `Het staat op de ${beelden.length} foto's hierbij (samen één recept, bijvoorbeeld een dubbele pagina). Lees ze in volgorde en maak er één recept van.`;
+  const staart = `
+Neem de naam, de ingrediënten met hun hoeveelheden en de stappen over zoals ze er staan. Staat het aantal personen, de tijd of het soort maaltijd er niet bij, schat dat dan realistisch. Kun je een woord echt niet lezen, laat het dan weg in plaats van te gokken.${extra ? `
+
+Ik zet er zelf nog dit bij (gebruik het naast wat je op de foto leest):
+${extra}` : ''}`;
+  try{
+    const inhoud = beelden.map(f => ({type:'image', source:{type:'base64', media_type:f.mt, data:f.data}}));
+    inhoud.push({type:'text', text: importPrompt(bron, staart)});
+    let r = leesRecept(await aiRequest({model:AI_MODEL, max_tokens:8000, messages:[{role:'user', content:inhoud}]}));
+    if(Array.isArray(r)) r = r[0];
+    if(impTitel && r) r.name = impTitel;
+    /* de foto waarmee je 'm inlaadt wordt ook meteen het plaatje van het
+       recept — anders schrijft de AI het recept keurig over, maar staat
+       er straks nergens meer een foto bij. */
+    if(r) r.foto = `data:${beelden[0].mt};base64,${beelden[0].data}`;
+    if(!showCandidates(r)) throw new Error('Ik kon er geen recept uit halen. Probeer een scherpere foto, of typ het over in het vak eronder.');
+    impFotos = [];
+  }catch(e){ importFout(e); }
+}
+
+/* één knop voor alles wat klaarstaat */
+async function importStart(){
+  leesImpVelden();
+  if(impFotos.length) return importFoto();
+  if(impText.trim()) return importRecipe();
+  toast('Voeg eerst een foto toe of plak een recept');
+}
+
+async function importRecipe(){
+  const raw = impText.trim();
+  if(!raw){ toast('Plak eerst een recept of een link'); return; }
+  const tweak = impTweak.trim();
+  /* is het een geplakt receptbestand? dan hoeft de AI er niet aan te pas te komen */
+  if(!tweak && /^[\[{]/.test(raw)){
+    try{
+      const data = JSON.parse(extractJson(raw));
+      if(showCandidates(Array.isArray(data) ? data : (data.recipes || data))) return;
+    }catch(e){}
+  }
+  const isLink = /^https?:\/\//i.test(raw) || /^www\./i.test(raw);
+  $('screen').innerHTML = `<h1 class="title hand">Even lezen…</h1>
+    <p class="subtitle">${isLink ? 'Ik haal het recept op en schrijf het over.' : 'Ik schrijf het recept over in jouw vorm.'}</p>${PAN_DRAWING}`;
+  const bron = isLink
+    ? 'Het is een link. Open hem, of zoek het recept op als de pagina niet te lezen is, en gebruik wat er echt in staat.'
+    : 'Het staat hieronder als geplakte tekst. Houd je aan wat er staat; vul alleen aan waar iets duidelijk ontbreekt.';
+  const prompt = importPrompt(bron, `
+Recept:
+${raw}
+`);
+  try{
+    const req = {model:AI_MODEL, max_tokens:8000, messages:[{role:'user',content:prompt}]};
+    if(isLink || aiOn('search')) req.tools = [{type:'web_search_20260209', name:'web_search', max_uses:3}];
+    const txt = await aiRequest(req);
+    let r = leesRecept(txt);
+    if(impTitel && r) r.name = impTitel;
+    if(!showCandidates(r)) throw new Error('Ik kon er geen recept uit halen. Plak anders de hele tekst van het recept.');
+  }catch(e){ importFout(e); }
+}
+
+/* Een tip mag oude tekst zijn of een uitgewerkte tip met eigen ingrediënten
+   en een eigen stap. Uitgewerkt = meteen aan te vinken, zonder de AI. */
+function tipObj(t){
+  if(typeof t === 'string') return {text:t, add:[], step:null, on:false};
+  const step = t.step || (t.stap ? {after:+t.na || 0, text:String(t.stap)} : null);
+  return {
+    text: String(t.text || t.tekst || ''),
+    add: (t.add || t.ingredienten || []).map(String),
+    step: step ? {after:+step.after || 0, text:String(step.text)} : null,
+    on: !!t.on
+  };
+}
+const tipReady = t => !!((t.add && t.add.length) || t.step);
+
+/* Een tip aanvinken. Kwam hij als losse zin binnen, dan werken we hem eerst
+   uit tot ingrediënten en een eigen stap — met de AI als die er is, en anders
+   komt de tip als laatste stap onderaan. Daarna gaat het vinkje aan. */
+async function tipAanUit(rid, ix){
+  const r = S.recipes.find(x=>x.id===rid);
+  if(!r || !r.tips || r.tips[ix] == null) return;
+  const tip = tipObj(r.tips[ix]);
+  if(!tip.on && !tipReady(tip)){
+    if(aiKey()){
+      toast('Tip uitwerken…');
+      try{
+        const d = JSON.parse(extractJson(await aiRequest({model:AI_MODEL, max_tokens:700, messages:[{role:'user', content:
+`Ik wil deze tip in mijn recept verwerken. Zeg me precies wat ik dan extra nodig heb en welke stap erbij komt.
+
+Recept: ${r.name} (${r.serves} personen)
+Ingrediënten:
+${(r.ingredients||[]).join('\n')}
+Stappen:
+${(r.steps||[]).map((x,i)=>`${i+1}. ${x}`).join('\n')}
+
+Tip: ${tip.text}
+
+Antwoord met UITSLUITEND geldige JSON, geen markdown:
+{"ingredienten":["1 el ... (met hoeveelheid, alleen wat er nog niet in staat)"],"stap":"één korte zin in dezelfde toon als de stappen hierboven","na":${(r.steps||[]).length}}
+"na" is het stapnummer waarna die stap komt.`}]})));
+        tip.add = (d.ingredienten||[]).map(String);
+        if(d.stap){
+          const n = (r.steps||[]).length;
+          tip.step = {after: Math.max(0, Math.min(n, +d.na || n)), text:String(d.stap)};
+        }
+      }catch(e){ lastAiError = e.message || String(e); }
+    }
+    /* geen sleutel of niet gelukt? dan zetten we de tip zelf onderaan */
+    if(!tipReady(tip)) tip.step = {after:(r.steps||[]).length, text:tip.text};
+  }
+  tip.on = !tip.on;
+  r.tips[ix] = tip;
+  await persist(); render();
+  toast(tip.on ? 'Tip zit nu in het recept' : 'Tip er weer uit');
+}
+
+/* het recept zoals het nu is: met de aangevinkte tips erin verwerkt */
+function withTips(r){
+  const ingredients = (r.ingredients||[]).slice();
+  const steps = (r.steps||[]).slice();
+  const on = (r.tips||[]).map(tipObj).filter(t=>t.on && tipReady(t));
+  on.forEach(t=>(t.add||[]).forEach(x=>{ if(!ingredients.includes(x)) ingredients.push(x); }));
+  /* van achter naar voren invoegen, dan kloppen de plekken nog */
+  on.map(t=>t.step).filter(Boolean)
+    .sort((a,b)=>b.after - a.after)
+    .forEach(st=>{ steps.splice(Math.max(0, Math.min(steps.length, st.after)), 0, st.text); });
+  return {ingredients, steps};
+}
+
+/* tips en uitleg onder de stappen, alleen als ze er zijn */
+function extraBlocks(r, saved){
+  const tips = (r.tips||[]).map(tipObj);
+  return `${(r.letop||[]).length ? `
+    <div class="eyebrow"><span>Aangepast voor wie mee-eet</span></div>
+    <div class="sketch card">
+      ${r.letop.map(x=>`<div class="step"><span class="n">·</span><span class="tx">${esc(x)}</span></div>`).join('')}
+    </div>` : ''}${tips.length ? `
+    <div class="eyebrow"><span>Tips</span></div>
+    ${saved ? `<div class="muted" style="font-size:14px;margin:0 4px 8px;line-height:1.45">Vink een tip aan en hij wordt in het recept en de kookstand meegenomen.</div>` : ''}
+    <div class="sketch card">
+      ${tips.map((t,ix)=>{
+        if(saved) return `<div class="step" style="align-items:center">
+          <button class="tickbox ${t.on?'on':''}" data-tipon="${r.id}:${ix}" aria-label="In het recept verwerken">${ic('check','')}</button>
+          <span class="tx">${esc(t.text)}</span>
+        </div>`;
+        return `<div class="step"><span class="n">·</span><span class="tx">${esc(t.text)}</span></div>`;
+      }).join('')}
+    </div>` : ''}
+    ${r.uitleg ? `
+    <div class="eyebrow"><span>Waarom zo?</span></div>
+    <div class="sketch card"><div class="tx" style="font-size:17px;line-height:1.5">${esc(r.uitleg)}</div></div>` : ''}`;
+}
+
+function viewPicks(){
+  return `
+    <div class="detail-top">
+      <button class="back" data-tab="home" aria-label="Terug">${ic('back','')}</button>
+      <span class="h hand">Kies een recept</span>
+      <span style="width:28px"></span>
+    </div>
+    <p class="subtitle" style="margin-top:6px">${suggestions.length} ${suggestions.length===1?'idee':'ideeën'} op basis van je keuzes. Vink aan wat je wilt bewaren; tik op de naam om te bekijken.</p>
+    ${suggestions.map(candidateCard).join('')}
+    <button class="btn fill wide" id="picks-save" style="margin-top:6px">${ic('save','')} ${picked.size ? `Bewaar ${picked.size} recept${picked.size===1?'':'en'}` : 'Niets bewaren'}</button>
+    <button class="btn ghost wide" data-go="suggest" style="margin-top:10px">${ic('spark','')} Nog eens proberen</button>
+  `;
+}
+function candidateCard(c){
+  const on = picked.has(c.id);
+  return `<div class="sketch card" style="background:var(${typeOf(c.type).v});${on?'':'opacity:.6'}">
+    <div class="row">
+      <button class="tickbox ${on?'on':''}" data-pick="${c.id}" aria-label="Bewaren">${ic('check','')}</button>
+      <div class="grow" data-cand="${c.id}" style="cursor:pointer">
+        <div class="name hand">${esc(c.name)}</div>
+        <div class="meta">${c.mins} min · ${c.serves} pers. · ${LEVEL_NL[c.level]||c.level}</div>
+      </div>
+    </div>
+  </div>`;
+}
+function viewCandidate(id){
+  const c = suggestions.find(x=>x.id===id);
+  if(!c) return viewPicks();
+  return `
+    <div class="detail-top">
+      <button class="back" data-go="picks" aria-label="Terug">${ic('back','')}</button>
+      <button class="icon-btn" data-savecand="${c.id}" aria-label="Bewaren">${ic('save','')}</button>
+    </div>
+    <h1 class="title hand" style="font-size:34px;margin-top:6px">${esc(c.name)}</h1>
+    <p class="subtitle">${typeOf(c.type).label} · idee — nog niet bewaard</p>
+    ${c.foto ? `<div class="sketch card" style="padding:0;overflow:hidden;margin-bottom:14px">
+      <img src="${esc(c.foto)}" alt="Foto van ${esc(c.name)}" style="display:block;width:100%;max-height:220px;object-fit:cover">
+    </div>` : ''}
+    <div class="sketch card" style="background:var(${typeOf(c.type).v})">
+      <div class="stat-grid">
+        <div class="stat"><div class="k">Tijd</div><div class="v hand">${c.mins}′</div></div>
+        <div class="stat"><div class="k">Personen</div><div class="v hand">${c.serves}</div></div>
+        <div class="stat"><div class="k">Niveau</div><div class="v hand">${LEVEL_NL[c.level]||c.level}</div></div>
+      </div>
+    </div>
+    <div class="eyebrow"><span>Ingrediënten</span></div>
+    <div class="sketch card">
+      ${(c.ingredients||[]).map(i=>`<div class="step"><span class="n">·</span><span class="tx">${esc(i)}</span></div>`).join('')}
+    </div>
+    <div class="eyebrow"><span>Stappen</span></div>
+    <div class="sketch card">
+      ${(c.steps||[]).map((st,i)=>`<div class="step"><span class="n hand">${i+1}</span><span class="tx">${esc(st)}</span></div>`).join('')}
+    </div>
+    ${(() => {
+      const found = careFindings(c);
+      return found.length ? `
+      <div class="eyebrow"><span>Let op</span></div>
+      <div class="sketch card">
+        ${found.map(f=>`<div class="care-note">
+          <div class="who">Voor ${esc((f.who||[]).join(' en '))}</div>
+          <div class="w">${esc(f.warn)}</div>
+          <div class="f">${esc(f.fix)}</div>
+        </div>`).join('')}
+      </div>` : '';
+    })()}
+    ${extraBlocks(c)}
+    <button class="btn ghost wide" data-savecand="${c.id}" style="margin-top:4px">${ic('save','')} Bewaren in mijn recepten</button>
+  `;
+}
+function saveCandidate(id){
+  const c = suggestions.find(x=>x.id===id);
+  if(!c) return null;
+  const rec = { id:uid(), name:c.name, type:c.type||'dinner', mins:+c.mins||0, serves:+c.serves||2, level:c.level||'easy', ingredients:c.ingredients||[], steps:c.steps||[] };
+  if(Array.isArray(c.tips) && c.tips.length) rec.tips = c.tips.map(tipObj);
+  if(c.uitleg) rec.uitleg = String(c.uitleg);
+  if(Array.isArray(c.letop) && c.letop.length) rec.letop = c.letop.map(String);
+  if(c.foto) rec.foto = String(c.foto);
+  S.recipes.push(rec);
+  return rec;
+}
+
+/* ---------------- suggestion ---------------- */
+async function suggest(opts){
+  opts = opts || { meal:'dinner', who:(S.family||[]).filter(m=>m.eat).map(m=>m.id), prefs:(S.prefs&&S.prefs.flags)||[] };
+  const count = Math.min(5, Math.max(1, +opts.count || 3));
+  const mealLabel = {breakfast:'ontbijt', lunch:'lunch', lunchtogo:'lunch om mee te nemen naar werk', dinner:'avondmaaltijd'}[opts.meal] || 'maaltijd';
+  const mains = (opts.main||[]).map(id=>{ const m = MAIN_ING.find(x=>x.id===id); return m?m.hint:null; }).filter(Boolean);
+  const mainNote = mains.length ? ` Maak het ${mains.join(' of ')}.` : '';
+  const wish = String(opts.extra||'').trim();
+  const wishNote = wish ? ` Extra wens van de kok, volg deze strikt: ${wish}.` : '';
+  const searchNote = aiOn('search') ? ' Zoek eerst online naar bestaande, beproefde recepten en baseer je daarop; verzin niet zomaar iets nieuws. Noem geen bronnen of links in je antwoord.' : '';
+  const schijfNote = aiOn('schijf') ? ' Houd rekening met de Schijf van Vijf van het Voedingscentrum: ruim groente en fruit, volkoren, peulvruchten, noten of vis, en beperk zout, verzadigd vet en toegevoegde suiker.' : '';
+  const tipsNote = aiOn('tips') ? ' Geef in "tips" twee tot vier suggesties voor extra ingrediënten, kruiden of specerijen. Werk elke tip volledig uit: "tekst" is de suggestie in één zin, "ingredienten" zijn de regels die er dan bij horen (met hoeveelheid), "stap" is de extra stap in het stappenplan en "na" het stapnummer waarna die stap komt (0 = helemaal vooraan). Zo kan ik een tip met één tik in het recept verwerken.' : '';
+  const uitlegNote = aiOn('uitleg') ? ' Leg in "uitleg" in twee tot vier zinnen uit hoe de belangrijkste techniek werkt en waarom je het zo doet.' : '';
+  const lvl = (opts.level && opts.level !== 'any') ? opts.level : '';
+  const levelNote = lvl ? ` Houd het kookniveau op ${LEVEL_NL[lvl]} — pas de techniek en het aantal stappen daarop aan.` : '';
+  const mealNote = opts.meal==='lunchtogo' ? ' Het is een lunch om mee te nemen naar werk: thuis vooraf klaar te maken, lekt niet, blijft lekker koud of is makkelijk op te warmen, en past in een lunchbox of meeneembakje.' : '';
+  const members = (S.family||[]).filter(m=>opts.who.includes(m.id));
+  const serves = members.length || 2;
+  const famTxt = familyPrompt(members);
+  const famFields = famTxt ? ',"letop":["..."]' : '';
+  const famNote = famTxt ? ' Zet in "letop" per punt één zin over wat je aanpaste voor wie er mee-eet — laat het weg als er niets aan te passen viel.' : '';
+  const extraFields = `${aiOn('tips') ? ',"tips":[{"tekst":"...","ingredienten":["1 el ..."],"stap":"...","na":3}]' : ''}${aiOn('uitleg') ? ',"uitleg":"..."' : ''}${famFields}`;
+  $('screen').innerHTML = `<h1 class="title hand">Even denken…</h1>
+    <p class="subtitle">${aiOn('search')?'Ik zoek recepten op en pas ze aan':'Ik stel ${count===1?"een idee":"ideeën"} samen'} op basis van je voorkeuren.</p>${PAN_DRAWING}`;
+  const prompt = `Bedenk één ${mealLabel}. In huis: ${S.pantry.length ? S.pantry.join(', ') : 'een gewone basisvoorraad'}.
+Maximaal 45 minuten, tenzij anders gevraagd. Schrijf in het Nederlands, tutoyeren. Noem in elke stap de hoeveelheden waar het om gaat (300 g, 200 ml, 1 el), zodat ik tijdens het koken niet hoef terug te bladeren.${mealNote}${mainNote}${levelNote}${wishNote}${searchNote}${schijfNote}${tipsNote}${uitlegNote}${famNote}
+${equipPrompt()}${prefsPrompt(opts.prefs)}${familyPrompt(members)}
+Bedenk precies ${count} ${count===1?'recept':'verschillende recepten'} waaruit ik kan kiezen.
+Antwoord met UITSLUITEND geldige JSON, geen markdown: een array van ${count} ${count===1?'recept':'recepten'}:
+[{"name":"","type":"${opts.meal}","mins":25,"serves":${serves},"level":"${lvl||'easy'}","ingredients":["..."],"steps":["..."]${extraFields}}]`;
+  try{
+    const req = {model:AI_MODEL, max_tokens:Math.min(16000, 2600*count + 2000), messages:[{role:'user',content:prompt}]};
+    if(aiOn('search')) req.tools = [{type:'web_search_20260209', name:'web_search', max_uses:3}];
+    const txt = await aiRequest(req);
+    let arr;
+    try{ arr = JSON.parse(extractJson(txt)); }
+    catch(e){ throw new Error('De AI stopte halverwege het antwoord. Vraag om minder recepten tegelijk, of zet bij Voorkeuren "Recepten opzoeken" of "Tips" even uit.'); }
+    if(!Array.isArray(arr)) arr = [arr];
+    suggestions=arr.slice(0,count).map(r=>PanklaarSecurity.recipe(r,{newId:true}));
+    picked = new Set(suggestions.map(x=>x.id));   /* standaard alles bewaren */
+    go('recipes','picks');
+  }catch(e){
+    lastAiError = e.message || String(e);
+    const noKey = !aiKey();
+    $('screen').innerHTML = `<h1 class="title hand">${noKey ? 'AI-sleutel nodig' : 'Niet gelukt'}</h1>
+      <p class="subtitle">${noKey
+        ? 'Vul eerst je Anthropic API-sleutel in bij Jij → AI-sleutel; dan kan ik recepten bedenken.'
+        : 'De AI-dienst gaf deze melding terug:'}</p>
+      ${noKey ? '' : `<div class="sketch card"><div class="tx" style="font-size:17px;line-height:1.45">${esc(lastAiError)}</div></div>`}
+      <button class="btn fill wide" data-tab="profile">${ic('user','')} Naar AI-sleutel</button>
+      <button class="btn ghost wide" data-go="suggest" style="margin-top:10px">Nog eens proberen</button>
+      <button class="btn ghost wide" data-tab="home" style="margin-top:10px">Terug naar start</button>`;
+  }
+}
+
+/* ---------------- cook mode ---------------- */
+let cook = {steps:[], i:0, recipeId:null};
+let timerTick = null;
+
+function openCook(id){
+  const r = S.recipes.find(x=>x.id===id); if(!r) return;
+  const V = withTips(r);
+  cook.steps = V.steps; cook.i = 0; cook.recipeId = id; cook.ings = V.ingredients;
+  cookAns = null; $('cook').classList.add('on'); renderTimers(); drawStep(); drawCookAsk();
+}
+function closeCook(){ $('cook').classList.remove('on'); renderTimers(); }
+
+function drawStep(){
+  const s = cook.steps[cook.i] || '';
+  $('cookCount').textContent = `Stap ${cook.i+1} van ${cook.steps.length}`;
+  const amts = stepIngs(s, cook.ings);
+  const rec = S.recipes.find(x=>x.id===cook.recipeId);
+  const careHere=((rec&&rec.care)||[]).filter(c=>String(c.pat||'').split('|').filter(Boolean).some(word=>{
+    const literal=word.replace(/\\(.)/g,'$1').toLowerCase();
+    let at=-1;const lower=s.toLowerCase();
+    while((at=lower.indexOf(literal,at+1))>=0){if(at===0||!/[\p{L}\p{N}_]/u.test(s[at-1]))return true;}
+    return false;
+  }));
+  $('cookStep').innerHTML = `<div class="cook-n">${cook.i+1}</div><div class="cook-tx">${esc(s)}</div>
+    ${amts.length ? `<div class="cook-amts">${amts.map(a=>`<span>${esc(a.text)}</span>`).join('')}</div>` : ''}
+    ${careHere.map(c=>`<div class="cook-care">
+      <div class="w hand">Let op · ${esc((c.who||[]).join(' en '))}</div>
+      <div class="f">${esc(c.fix)}</div>
+    </div>`).join('')}`;
+  $('cookPrev').disabled = cook.i === 0;
+  $('cookNext').textContent = cook.i === cook.steps.length-1 ? 'Klaar' : 'Volgende';
+  const m = s.match(/(\d+)\s*(min|minuten|minuut)/i);
+  if(m && !S.timers.some(t=>t.stepIdx===cook.i && t.recipeId===cook.recipeId && !t.done)){
+    const min = parseInt(m[1],10), label = timerLabel(s, cook.ings, m.index);
+    $('cookTimerAdd').innerHTML = `<button class="btn ghost cook-add-t" data-addtimer="${min}" data-tlabel="${esc(label)}">${ic('flame','')} Zet timer · ${min} min · ${esc(label)}</button>`;
+  } else {
+    $('cookTimerAdd').innerHTML = '';
+  }
+  const nx = cook.steps[cook.i+1];
+  if(nx){ $('cookPeek').style.display='block'; $('cookPeek').innerHTML = `<div class="lbl">Straks · stap ${cook.i+2}</div><div class="ptx">${esc(nx)}</div>`; }
+  else { $('cookPeek').style.display='none'; }
+}
+
+/* ingrediënten die vooral meebakken of op smaak brengen; die zijn zelden het onderwerp */
+const SIDE_ING = ['olie','olijfolie','zonnebloemolie','boter','roomboter','water','bouillon','zout','peper',
+  'wijn','azijn','melk','room','bloem','suiker','kruiden','nootmuskaat','paprikapoeder','kerrie','kaneel',
+  'peterselie','basilicum','tijm','salie','oregano','laurier','citroensap','honing'];
+/* losjes vergelijken: kipfilets ~ kipfilet, rijst ~ risottorijst */
+const ingSim = (a,b) => a === b || (a.length >= 4 && b.includes(a)) || (b.length >= 4 && a.includes(b));
+const wordsOf = t => String(t).toLowerCase().replace(/[^a-zà-öø-ÿ]+/g,' ').trim().split(' ').filter(Boolean);
+/* woordjes die in een ingrediëntnaam niets zeggen ('peper en zout') */
+const ING_SKIP = ['en','of','de','het','een','met','per','voor','naar','uit','tot','in','op','aan','bij','stuks','stuk','snufje','takjes','takje','tenen','teen','blik','pak','bosje','plakken','plak'];
+const isSide = n => wordsOf(n).some(w => SIDE_ING.some(x => ingSim(w, x)));
+
+/* elk ingrediënt dat in deze tekst genoemd wordt, op volgorde van noemen */
+function stepIngs(txt, list){
+  const words = wordsOf(txt);
+  const out = [];
+  (list||[]).forEach(orig=>{
+    const name = parseIng(String(orig)).name.replace(/\(.*?\)/g,' ');
+    const parts = wordsOf(name).filter(w=>w.length>=2 && !ING_SKIP.includes(w));
+    if(!parts.length) return;
+    for(let i=0;i<words.length;i++){
+      const w = words[i];
+      /* korte namen als 'ui' alleen precies; langere mogen buigen */
+      const hit = parts.some(p => (p.length < 4 || w.length < 4) ? w === p : ingSim(w,p));
+      if(hit){ out.push({text:String(orig), name, at:i}); break; }
+    }
+  });
+  return out.sort((a,b)=>a.at-b.at);
+}
+/* bijvoeglijke woorden vooraan zeggen niets over wát het is */
+const ING_ADJ = ['verse','vers','gedroogde','gemalen','geraspte','hele','kleine','grote','rode','witte','groene',
+  'zwarte','gele','magere','volle','gerookte','gekookte','gehakte','fijngehakte','zoete','zure','jonge','oude'];
+/* korte naam voor op een timerchip */
+function shortName(n){
+  const w = wordsOf(n.replace(/\(.*?\)/g,' ')).filter(x=>!ING_ADJ.includes(x) && !ING_SKIP.includes(x));
+  return (w[0] || 'timer').slice(0,16);
+}
+/* waar de timer voor is: liefst het ingrediënt dat het onderwerp is van de stap */
+function timerLabel(txt, list, at){
+  const hits = stepIngs(txt, list);
+  const main = hits.find(h=>!isSide(h.name)) || hits[0];
+  return main ? shortName(main.name) : labelFromStep(txt, at);
+}
+
+/* een woord uit de staptekst als klein label — werkwoorden en stopwoorden overslaan */
+const TIMER_STOP = new Set(['de','het','een','en','met','op','in','tot','voor','van','aan','over','onder','door','bij','naar','uit','om','af','dan','nog','ca','ong','circa','ongeveer','minstens','tegen',
+  'kook','bak','roer','snijd','snij','meng','voeg','laat','zet','breng','verwarm','gril','grill','stoof','rooster','klop','giet','schep','prak','pureer','marineer','kruid','bestrooi','beleg','vul','rol','week','spoel','doe','maak','warm','bereid','pocheer','sudder','blancheer','fruit','wok','stoom','bind','proef','pers','was','dep','snipper','hak','rasp','schil','laten','bakken','koken','gaar','beetgaar']);
+function labelFromStep(txt, at){
+  const clean = w => w.toLowerCase().replace(/[.,;:!?()]/g,'');
+  const ok = w => w && !/^\d+$/.test(w) && !/^(min|minuten|minuut|sec|seconden|uur)$/.test(w) && !TIMER_STOP.has(w) && w.length >= 3;
+  txt = String(txt); if(at == null) at = txt.length;
+  const before = txt.slice(0, at).split(/\s+/).map(clean).filter(Boolean);
+  for(let i = before.length-1; i >= 0; i--){ if(ok(before[i])) return before[i]; }
+  const after = txt.slice(at).split(/\s+/).map(clean).filter(Boolean);
+  for(const w of after){ if(ok(w)) return w; }
+  return 'timer';
+}
+
+/* wat weten we zelf al? hoeveelheden en tijden staan gewoon in het recept */
+function recipeAnswer(q, r){
+  if(!r) return null;
+  const low = q.toLowerCase();
+  if(/waarom|hoezo|waarvoor|kan ik|mag ik|wat als|in plaats van|vervang/.test(low)) return null;
+  if(/hoeveel|hoe veel|hoeveelheid|gram|aantal|\bml\b|\bgr\b|liter|deciliter|lepel/.test(low)){
+    const hits = stepIngs(low, r.ingredients);
+    if(hits.length) return hits.map(h=>h.text).join('\n');
+  }
+  if(/hoe lang|hoelang|hoeveel minuten|tijd/.test(low)){
+    const hits = stepIngs(low, r.ingredients);
+    const steps = (r.steps||[]).filter(st=>/\d+\s*(min|minuten|minuut|uur|sec)/i.test(st));
+    const mine = hits.length ? steps.filter(st=>stepIngs(st, hits.map(h=>h.text)).length) : [];
+    const pick = mine.length ? mine : (hits.length ? [] : steps);
+    if(pick.length) return pick.join('\n');
+  }
+  return null;
+}
+
+let cookAns = null;
+function drawCookAsk(){
+  const box = $('cookAsk'); if(!box) return;
+  box.innerHTML = `
+    ${cookAns ? `<div class="cook-ans">
+      <button class="x" id="cookAnsX" aria-label="Sluiten">×</button>
+      <div class="q">${esc(cookAns.q)}</div>
+      <div class="a">${esc(cookAns.a)}</div>
+      ${cookAns.src ? `<div class="src">${esc(cookAns.src)}</div>` : ''}
+    </div>` : ''}
+    <div class="cook-ask">
+      <input class="inp" id="cookQ" placeholder="Vraag over dit recept" autocomplete="off">
+      <button class="btn fill" id="cookQGo" aria-label="Vragen">${ic('spark','')}</button>
+    </div>`;
+}
+async function cookQuestion(){
+  const el = $('cookQ');
+  const q = el ? el.value.trim() : '';
+  if(!q) return;
+  const r = S.recipes.find(x=>x.id===cook.recipeId);
+  const own = recipeAnswer(q, r);
+  if(own){ cookAns = {q, a:own, src:'Uit het recept'}; drawCookAsk(); return; }
+  if(!aiKey()){
+    cookAns = {q, a:'Dit staat niet met zoveel woorden in het recept. Voor andere vragen heb ik een AI-sleutel nodig — die vul je in bij Jij → AI-sleutel.', src:''};
+    drawCookAsk(); return;
+  }
+  cookAns = {q, a:'Even denken…', src:''}; drawCookAsk();
+  const ctx = r ? `Recept: ${r.name} (${r.serves} personen, ${r.mins} min).
+Ingrediënten:
+${(r.ingredients||[]).join('\n')}
+Stappen:
+${(r.steps||[]).map((x,i)=>`${i+1}. ${x}`).join('\n')}
+Ik ben nu bij stap ${cook.i+1}.` : '';
+  try{
+    const txt = await aiRequest({model:AI_MODEL, max_tokens:500, messages:[{role:'user', content:
+`Je helpt me terwijl ik sta te koken. Antwoord kort en concreet in het Nederlands, tutoyeren, maximaal drie zinnen, zonder opsomtekens.
+Staat het antwoord in het recept? Noem dan die hoeveelheid of tijd letterlijk. Anders leg je het kort uit als kok.${familyPrompt()}
+
+${ctx}
+
+Mijn vraag: ${q}`}]});
+    cookAns = {q, a:txt.trim(), src:'Antwoord van de AI'};
+  }catch(e){
+    lastAiError = e.message || String(e);
+    cookAns = {q, a:lastAiError, src:''};
+  }
+  drawCookAsk();
+}
+
+function fmtTime(sec){
+  return `${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`;
+}
+/* resterende seconden — bij een lopende timer uit de eindtijd (kloptijd), zodat
+   achtergrond/telefoon-op-slot de tijd niet laat verlopen */
+function timerRemaining(t){
+  if(t.done) return 0;
+  if(t.running && t.endAt) return Math.max(0, Math.round((t.endAt - Date.now())/1000));
+  return t.left || 0;
+}
+function askNotifyPermission(){
+  try{ if(window.Notification && Notification.permission === 'default') Notification.requestPermission(); }catch(e){}
+}
+function notify(msg){
+  try{ if(window.Notification && Notification.permission === 'granted') new Notification('Panklaar', {body:msg}); }catch(e){}
+}
+/* bij terugkeer in de app: timers die tijdens afwezigheid afliepen alsnog afronden */
+function catchUpTimers(){
+  let changed = false;
+  (S.timers||[]).forEach(t=>{
+    if(t.running && !t.done && timerRemaining(t) <= 0){
+      t.left = 0; t.running = false; t.done = true; t.endAt = null;
+      beep(); toast(`Klaar: ${t.label}`); notify(`Timer klaar: ${t.label}`); changed = true;
+    }
+  });
+  renderTimers();
+  if(changed) persist();
+  if((S.timers||[]).some(t=>t.running && !t.done)) ensureTick();
+}
+function renderTimers(){
+  const list = S.timers || [];
+  const html = !list.length ? '' : list.map(t=>{
+    const state = t.done ? 'done' : (t.running ? '' : 'paused');
+    const time = t.done ? 'Klaar' : fmtTime(timerRemaining(t));
+    const sub = (!t.running && !t.done) ? ' · pauze' : '';
+    return `<div class="tchip ${state}">
+      <button class="tchip-x" data-tdismiss="${t.id}" aria-label="Timer weg">×</button>
+      <div class="tchip-time hand" data-ttoggle="${t.id}">${time}</div>
+      <div class="tchip-lbl">${esc(t.label)}${sub}</div>
+    </div>`;
+  }).join('');
+  const cookOpen = $('cook').classList.contains('on');
+  const cb = $('cookTimers'); if(cb){ cb.innerHTML = html; cb.style.display = (list.length && cookOpen) ? 'flex' : 'none'; }
+  const tb = $('timerbar'); if(tb){ tb.innerHTML = html; tb.style.display = (list.length && !cookOpen) ? 'flex' : 'none'; }
+}
+function ensureTick(){
+  if(timerTick) return;
+  timerTick = setInterval(()=>{
+    let changed = false;
+    (S.timers||[]).forEach(t=>{
+      if(t.running && !t.done && timerRemaining(t) <= 0){
+        t.left = 0; t.running = false; t.done = true; t.endAt = null;
+        beep(); toast(`Klaar: ${t.label}`); notify(`Timer klaar: ${t.label}`); changed = true;
+      }
+    });
+    renderTimers();
+    if(changed) persist();
+    if(!(S.timers||[]).some(t=>t.running && !t.done)){ clearInterval(timerTick); timerTick = null; }
+  },1000);
+}
+function addStepTimer(min, label, stepIdx){
+  if(!Number.isFinite(min)||min<=0||min>10080){toast("Deze timerduur is ongeldig");return;}
+  askNotifyPermission();
+  S.timers.push({id:uid(), label, left:min*60, endAt:Date.now()+min*60*1000, running:true, done:false, recipeId:cook.recipeId, stepIdx});
+  ensureTick(); renderTimers(); persist();
+}
+function toggleTimerById(id){
+  const t = (S.timers||[]).find(x=>x.id===id); if(!t || t.done) return;
+  if(t.running){ t.left = timerRemaining(t); t.running = false; t.endAt = null; }
+  else { t.running = true; t.endAt = Date.now() + (t.left||0)*1000; ensureTick(); }
+  renderTimers(); persist();
+}
+function dismissTimer(id){
+  S.timers = (S.timers||[]).filter(x=>x.id!==id);
+  renderTimers(); persist();
+  if($('cook').classList.contains('on')) drawStep();
+}
+function beep(){
+  try{
+    const a = new (window.AudioContext||window.webkitAudioContext)();
+    const o = a.createOscillator(), g = a.createGain();
+    o.connect(g); g.connect(a.destination); o.frequency.value = 660; o.type='triangle';
+    g.gain.setValueAtTime(.001,a.currentTime); g.gain.exponentialRampToValueAtTime(.25,a.currentTime+.02);
+    g.gain.exponentialRampToValueAtTime(.001,a.currentTime+1.1);
+    o.start(); o.stop(a.currentTime+1.2);
+  }catch(e){}
+}
+
+/* ---------------- actions ---------------- */
+function pack(){ return {recipes:S.recipes, shopping:S.shopping, pantry:S.pantry, plan:S.plan,
+  theme:S.theme, family:S.family, equip:S.equip, prefs:S.prefs, timers:S.timers,
+  usage:S.usage, budget:S.budget, aiDienst:S.aiDienst, aiModellen:S.aiModellen}; }
+let opslagOk = true;
+async function persist(){
+  if(restoring)return;
+  const ok = await saveData(pack());
+  /* lukt bewaren niet (privémodus, opslag vol), dan moet je dat weten —
+     anders lijkt alles te werken tot je de app afsluit */
+  if(ok !== opslagOk){
+    opslagOk = ok;
+    if(!ok) toast('Let op: deze telefoon bewaart niets — zie Jij');
+    render();
+  }
+}
+
+function addToList(items, from){
+  items.forEach(t=>{
+    const clean = String(t).trim(); if(!clean) return;
+    const p = parseIng(clean);
+    const key = normName(p.name) + '|' + p.unit;
+    /* zelfde ingrediënt al open op de lijst? tel de hoeveelheid erbij op */
+    const hit = S.shopping.find(i => !i.done && ingKey(i.text) === key);
+    if(hit){
+      const h = parseIng(hit.text);
+      if(h.qty != null && p.qty != null){
+        hit.text = fmtIng(h.qty + p.qty, h.unit || p.unit, h.name || p.name);
+      }
+      /* komt uit een tweede gerecht? dan hoort hij nergens meer specifiek bij */
+      if(from && hit.from && hit.from !== from) hit.from = 'Meerdere gerechten';
+      else if(from && !hit.from) hit.from = from;
+      return;   /* zonder hoeveelheid: staat er al, niets toe te voegen */
+    }
+    S.shopping.push({id:uid(), text:clean, done:false, from:from||''});
+  });
+  persist();
+}
+
+function applyTheme(){
+  if(S.theme==='auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', S.theme);
+}
+
+document.addEventListener('click', async (e)=>{
+  const t = e.target.closest('[data-tab],[data-open],[data-go],[data-filter],[data-type],[data-level],[data-save],[data-cook],[data-del],[data-addlist],[data-have],[data-serves],[data-tick],[data-rm],[data-pan],[data-theme],#shop-add,#shop-clear,#shop-wipe,#shop-to-pantry,#pan-add,#pan-photo-btn,#ai-save,#ai-test,#plan-shop,#cookExit,#cookPrev,#cookNext,[data-addtimer],[data-ttoggle],[data-tdismiss],[data-member],[data-memberedit],[data-memberdel],[data-eat],[data-stage],[data-savemember],#m-eat,[data-fam],[data-help],[data-prefmenu],[data-equipmenu],[data-equip],[data-prefflag],#askClose,#askGo,[data-ask-meal],[data-ask-who],[data-ask-pref],[data-pantmenu],[data-cand],[data-savecand],[data-ask-count],[data-ask-main],[data-ask-level],[data-preflevel],[data-pick],#picks-save,#imp-go,#imp-file-btn,#imp-foto-btn,[data-fotorm],[data-tipon],#cookQGo,#cookAnsX,[data-careon],#careClose,#careGo,#careSkip,[data-allergen],[data-research],#ai-budget-save,#ai-usage-reset,#warnClose,#warnOk,#warnGo,[data-dienst],#ai-model-save,[data-recfoto],[data-vak],#backup-maak,#backup-terug,#app-update,[data-veeg],#f-foto,[data-fotoweg],[data-menu],#menuClose');
+  if(!t) return;
+  if(slikKlik){ slikKlik = false; return; }
+
+  if(t.dataset.tab){ go(t.dataset.tab); return; }
+  if(t.dataset.open){ go('recipes','detail',t.dataset.open); maybeCare(t.dataset.open); return; }
+  if(t.dataset.go === 'new'){ go('recipes','edit',null); return; }
+  if(t.dataset.go === 'edit'){ go('recipes','edit',t.dataset.id); return; }
+  if(t.dataset.go === 'suggest'){ openAsk(); return; }
+  if(t.dataset.go === 'picks'){ go('recipes','picks'); return; }
+  if(t.dataset.go === 'import'){ go('recipes','import'); return; }
+  if(t.id === 'imp-go'){ await importStart(); return; }
+  if(t.dataset.filter){ S.filter = t.dataset.filter; render(); return; }
+
+  if(t.dataset.type){ document.querySelectorAll('#f-type .chip').forEach(c=>c.classList.toggle('on', c===t)); return; }
+  if(t.dataset.level){ document.querySelectorAll('#f-level .chip').forEach(c=>c.classList.toggle('on', c===t)); return; }
+
+  if(t.dataset.save){
+    const name = $('f-name').value.trim();
+    if(!name){ toast('Geef het recept eerst een naam'); return; }
+    const oud = S.recipes.find(r=>r.id===t.dataset.save) || {};
+    const rec = {
+      /* alles wat niet in het formulier staat (foto, let op, care) blijft staan */
+      ...oud,
+      id: t.dataset.save === 'new' ? uid() : t.dataset.save,
+      name,
+      type: (document.querySelector('#f-type .chip.on')||{}).dataset?.type || 'dinner',
+      mins: parseInt($('f-mins').value,10) || 0,
+      serves: parseInt($('f-serves').value,10) || 1,
+      level: (document.querySelector('#f-level .chip.on')||{}).dataset?.level || 'easy',
+      ingredients: $('f-ing').value.split('\n').map(s=>s.trim()).filter(Boolean),
+      steps: $('f-steps').value.split('\n').map(s=>s.trim()).filter(Boolean)
+    };
+    /* tips: tekst uit het veld, maar hou de uitgewerkte versie van dezelfde tip */
+    const oudeTips = (oud.tips||[]).map(tipObj);
+    const tipRegels = ($('f-tips') ? $('f-tips').value : '').split('\n').map(x=>x.trim()).filter(Boolean);
+    if(tipRegels.length) rec.tips = tipRegels.map(tekst=>{
+      const hit = oudeTips.find(o=>o.text === tekst);
+      return hit || tipObj(tekst);
+    });
+    else delete rec.tips;
+    const uitleg = ($('f-uitleg') ? $('f-uitleg').value : '').trim();
+    if(uitleg) rec.uitleg = uitleg; else delete rec.uitleg;
+    const i = S.recipes.findIndex(r=>r.id===rec.id);
+    if(i>=0 && S.recipes[i].have) rec.have = S.recipes[i].have.filter(h=>rec.ingredients.includes(h));
+    if(i>=0) S.recipes[i] = rec; else S.recipes.push(rec);
+    await persist(); go('recipes','detail',rec.id); toast('Recept opgeslagen');
+    return;
+  }
+
+  if(t.dataset.cook){ openCook(t.dataset.cook); return; }
+  if(t.dataset.del){
+    const r = S.recipes.find(x=>x.id===t.dataset.del);
+    S.recipes = S.recipes.filter(x=>x.id!==t.dataset.del);
+    S.timers=(S.timers||[]).filter(x=>x.recipeId!==t.dataset.del);
+    Object.keys(S.plan).forEach(d=>{ if(S.plan[d]===t.dataset.del) delete S.plan[d]; });
+    await persist(); go('recipes'); toast(`${r?r.name:'Recept'} verwijderd`);
+    return;
+  }
+  if(t.dataset.serves){
+    const r = S.recipes.find(x=>x.id===S.arg);
+    const base = Math.max(1, +(r&&r.serves) || 1);
+    viewServes = Math.min(50, Math.max(1, (viewServes || base) + (+t.dataset.serves)));
+    render(); return;
+  }
+  if(t.dataset.have){
+    const c = t.dataset.have.lastIndexOf(':');
+    const rid = t.dataset.have.slice(0,c), ix = +t.dataset.have.slice(c+1);
+    const r = S.recipes.find(x=>x.id===rid); if(!r) return;
+    const ing = r.ingredients[ix]; if(ing==null) return;
+    r.have = r.have || [];
+    r.have = r.have.includes(ing) ? r.have.filter(x=>x!==ing) : [...r.have, ing];
+    await persist(); render(); return;
+  }
+  if(t.dataset.addlist){
+    const r = S.recipes.find(x=>x.id===t.dataset.addlist);
+    const f = viewServes ? (viewServes / Math.max(1, +r.serves || 1)) : 1;
+    const need = withTips(r).ingredients.filter(i=>!(r.have||[]).includes(i)).map(i=>scaleIng(i, f));
+    if(!need.length){ toast('Alles is al in huis'); return; }
+    addToList(need, r.name); toast(`${need.length} op je lijst gezet`); return;
+  }
+
+  if(t.dataset.tick){
+    const i = S.shopping.find(x=>x.id===t.dataset.tick); i.done = !i.done;
+    await persist(); render(); return;
+  }
+  if(t.dataset.rm){ S.shopping = S.shopping.filter(x=>x.id!==t.dataset.rm); await persist(); render(); return; }
+  if(t.id === 'shop-add'){
+    const name = $('shop-in').value.trim(); if(!name) return;
+    const qty = ($('shop-qty') ? $('shop-qty').value : '').trim();
+    const unit = ($('shop-unit') ? $('shop-unit').value : '');
+    addToList([[qty, unit, name].filter(Boolean).join(' ')]);
+    render(); return;
+  }
+  if(t.id === 'shop-to-pantry'){
+    const done = S.shopping.filter(i=>i.done);
+    if(!done.length) return;
+    let added = 0;
+    done.forEach(i=>{
+      const nm = parseIng(i.text).name.trim().toLowerCase();
+      if(nm && !S.pantry.includes(nm)){ S.pantry.push(nm); added++; }
+    });
+    S.shopping = S.shopping.filter(i=>!i.done);
+    await persist(); render();
+    toast(`${added} naar je voorraad`);
+    return;
+  }
+  if(t.id === 'shop-clear'){ S.shopping = S.shopping.filter(i=>!i.done); await persist(); render(); return; }
+  if(t.id === 'shop-wipe'){
+    if(!confirmWipe){ confirmWipe = true; render(); return; }
+    const n = S.shopping.length;
+    S.shopping = []; confirmWipe = false;
+    await persist(); render(); toast(`${n} item${n===1?'':'s'} gewist`);
+    return;
+  }
+
+  if(t.id === 'plan-shop'){
+    const all = [];
+    Object.values(S.plan).forEach(id=>{
+      const r = S.recipes.find(x=>x.id===id); if(r) all.push(...r.ingredients);
+    });
+    if(!all.length){ toast('Nog niks gepland'); return; }
+    Object.values(S.plan).forEach(id=>{
+      const r = S.recipes.find(x=>x.id===id);
+      if(r) addToList(withTips(r).ingredients, r.name);
+    });
+    toast('Week op je lijst gezet'); return;
+  }
+
+  if(t.dataset.pan){ S.pantry = S.pantry.filter(p=>p!==t.dataset.pan); await persist(); render(); return; }
+  if(t.id === 'pan-photo-btn'){ $('pan-photo-input').click(); return; }
+  if(t.id === 'imp-file-btn'){ $('imp-file').click(); return; }
+  if(t.id === 'imp-foto-btn'){ leesImpVelden(); $('imp-foto').click(); return; }
+  if(t.dataset.recfoto){ fotoMenu(t.dataset.recfoto); return; }
+  if(t.id === 'f-foto'){ fotoVoor = S.arg; $('rec-foto-input').click(); return; }
+  if(t.dataset.fotoweg){
+    const r = S.recipes.find(x=>x.id===t.dataset.fotoweg);
+    if(r){ delete r.foto; await persist(); render(); toast('Foto weg'); }
+    return;
+  }
+  if(t.dataset.vak){ vakOpen[t.dataset.vak] = !vak(t.dataset.vak); render(); return; }
+  if(t.id === 'backup-maak'){ await maakBackup(); return; }
+  if(t.id === 'backup-terug'){ $('backup-input').click(); return; }
+  if(t.id === 'app-update'){ await haalNieuwsteVersie(); return; }
+  if(t.dataset.veeg){
+    S.prefs.veeg = !veegAan();
+    await persist(); render();
+    toast(veegAan() ? 'Terugvegen staat aan' : 'Terugvegen staat uit');
+    return;
+  }
+  if(t.id === 'menuClose'){ closeMenu(); return; }
+  if(t.dataset.menu !== undefined && menuData){
+    const it = menuData.items[+t.dataset.menu];
+    if(it && it.doe) await it.doe();
+    return;
+  }
+  if(t.dataset.fotorm !== undefined){
+    leesImpVelden();
+    impFotos.splice(+t.dataset.fotorm, 1);
+    render(); return;
+  }
+  if(t.id === 'cookQGo'){ await cookQuestion(); return; }
+  if(t.id === 'cookAnsX'){ cookAns = null; drawCookAsk(); return; }
+  if(t.dataset.careon !== undefined && careAsk){
+    const c = careAsk.items[+t.dataset.careon]; if(c) c.on = !c.on;
+    renderCare(); return;
+  }
+  if(t.id === 'careClose' || t.id === 'careSkip'){
+    if(careAsk){ const r = S.recipes.find(x=>x.id===careAsk.recipeId); if(r){ r.careDone = true; await persist(); } }
+    closeCare(); return;
+  }
+  if(t.id === 'warnClose' || t.id === 'warnOk'){ $('warn').classList.remove('on'); return; }
+  if(t.id === 'warnGo'){ $('warn').classList.remove('on'); go('profile'); return; }
+  if(t.dataset.dienst){
+    S.aiDienst = t.dataset.dienst;
+    lastAiError = '';
+    await persist(); render();
+    toast(`AI-dienst: ${DIENSTEN[S.aiDienst].label}`);
+    return;
+  }
+  if(t.id === 'ai-model-save'){
+    if(!S.aiModellen) S.aiModellen = {};
+    S.aiModellen[dienstId()] = ($('ai-model') ? $('ai-model').value : '').trim();
+    await persist(); render(); toast(`Model: ${aiModel()}`);
+    return;
+  }
+  if(t.id === 'ai-budget-save'){
+    const v = +($('ai-budget') ? $('ai-budget').value : 0);
+    if(!(v > 0)){ toast('Vul een bedrag boven nul in'); return; }
+    S.budget = v;
+    /* nieuw bedrag, dus de meldingen mogen weer een keer */
+    maandVak(maandNu()).gewaarschuwd = [];
+    await persist(); render(); toast(`Maandbedrag op ${dollar(v)}`);
+    return;
+  }
+  if(t.id === 'ai-usage-reset'){
+    S.usage = {};
+    await persist(); render(); toast('Tellerstand gewist');
+    return;
+  }
+  if(t.id === 'careGo'){
+    if(careAsk){
+      const r = S.recipes.find(x=>x.id===careAsk.recipeId);
+      if(r){
+        const keep = careAsk.items.filter(c=>c.on).map(({id,pat,who,warn,fix,stepIdx})=>({id,pat,who,warn,fix,stepIdx}));
+        r.care = keep; r.careDone = true;
+        await persist();
+        toast(keep.length ? `${keep.length} punt${keep.length===1?'':'en'} in het recept` : 'Niks toegevoegd');
+      }
+    }
+    closeCare(); render(); return;
+  }
+  if(t.id === 'pan-add'){
+    const v = $('pan-in').value.trim().toLowerCase();
+    if(v && !S.pantry.includes(v)) S.pantry.push(v);
+    await persist(); render(); return;
+  }
+  if(t.dataset.theme){ S.theme = t.dataset.theme; applyTheme(); await persist(); render(); return; }
+  if(t.id === 'ai-save'){
+    const ok = saveAiKey($('ai-key').value);
+    lastAiError=''; toast(ok ? 'AI-sleutel opgeslagen' : 'Opslaan lukt niet in deze browser'); render(); return;
+  }
+  if(t.id === 'ai-test'){
+    saveAiKey($('ai-key').value);
+    toast('Sleutel testen…');
+    try{
+      await aiRequest({model:AI_MODEL, max_tokens:16, messages:[{role:'user', content:'Antwoord met alleen: ok'}]});
+      lastAiError = ''; toast('Sleutel werkt!');
+    }catch(e){ lastAiError = e.message || String(e); toast(lastAiError); }
+    render(); return;
+  }
+
+  if(t.dataset.help){ helpOpen = !helpOpen; render(); return; }
+  if(t.dataset.fam === 'toggle'){ famOpen = !famOpen; render(); return; }
+  if(t.dataset.prefmenu){ prefOpen = !prefOpen; render(); return; }
+  if(t.dataset.equipmenu){ equipOpen = !equipOpen; render(); return; }
+  if(t.dataset.pantmenu){ pantOpen = !pantOpen; render(); return; }
+  if(t.dataset.cand){ go('recipes','cand',t.dataset.cand); return; }
+  if(t.dataset.pick){
+    const id = t.dataset.pick;
+    picked.has(id) ? picked.delete(id) : picked.add(id);
+    render(); return;
+  }
+  if(t.id === 'picks-save'){
+    if(!picked.size){ toast('Vink eerst een recept aan'); return; }
+    const n = [...picked].map(id=>saveCandidate(id)).filter(Boolean).length;
+    picked.clear(); await persist(); go('recipes');
+    toast(`${n} recept${n===1?'':'en'} bewaard`);
+    return;
+  }
+  if(t.dataset.tipon){
+    const [rid, ix] = t.dataset.tipon.split(':');
+    await tipAanUit(rid, +ix);
+    return;
+  }
+  if(t.dataset.research){ await researchMember(t.dataset.research); return; }
+  if(t.dataset.savecand){
+    const rec = saveCandidate(t.dataset.savecand);
+    if(rec){ await persist(); go('recipes','detail',rec.id); toast('Recept bewaard'); maybeCare(rec.id); }
+    return;
+  }
+  if(t.dataset.equip){
+    const id = t.dataset.equip;
+    S.equip = (S.equip||[]).includes(id) ? S.equip.filter(x=>x!==id) : [...(S.equip||[]), id];
+    await persist(); render(); return;
+  }
+  if(t.dataset.aiopt){
+    if(!S.prefs.ai) S.prefs.ai = {};
+    S.prefs.ai[t.dataset.aiopt] = !aiOn(t.dataset.aiopt);
+    await persist(); render(); return;
+  }
+  if(t.dataset.preflevel){ S.prefs.level = t.dataset.preflevel; await persist(); render(); return; }
+  if(t.dataset.prefflag){
+    const id = t.dataset.prefflag; const cur = S.prefs.flags||[];
+    S.prefs.flags = cur.includes(id) ? cur.filter(x=>x!==id) : [...cur, id];
+    await persist(); render(); return;
+  }
+  if(t.id === 'askClose'){ closeAsk(); return; }
+  if(t.id === 'askGo'){ const el = $('ask-extra'); if(el) ask.extra = el.value; const o = ask; closeAsk(); suggest(o); return; }
+  if(t.dataset.askMeal){ ask.meal = t.dataset.askMeal; renderAsk(); return; }
+  if(t.dataset.askWho){ const id = t.dataset.askWho; ask.who = ask.who.includes(id) ? ask.who.filter(x=>x!==id) : [...ask.who, id]; renderAsk(); return; }
+  if(t.dataset.askPref){ const id = t.dataset.askPref; ask.prefs = ask.prefs.includes(id) ? ask.prefs.filter(x=>x!==id) : [...ask.prefs, id]; renderAsk(); return; }
+  if(t.dataset.askMain){ const id = t.dataset.askMain; ask.main = ask.main.includes(id) ? ask.main.filter(x=>x!==id) : [...ask.main, id]; renderAsk(); return; }
+  if(t.dataset.askLevel){ ask.level = t.dataset.askLevel; S.prefs.level = ask.level; persist(); renderAsk(); return; }
+  if(t.dataset.askCount){ ask.count = +t.dataset.askCount; S.prefs.count = ask.count; persist(); renderAsk(); return; }
+  if(t.dataset.member){ go('profile','member',t.dataset.member); return; }
+  if(t.dataset.memberedit){ go('profile','memberEdit',t.dataset.memberedit); return; }
+  if(t.dataset.eat){
+    const m = S.family.find(x=>x.id===t.dataset.eat);
+    if(m){ m.eat = !m.eat; await persist(); render(); }
+    return;
+  }
+  if(t.dataset.stage || t.dataset.allergen){ t.classList.toggle('on'); return; }
+  if(t.id === 'm-eat'){ t.classList.toggle('on'); return; }
+  if(t.dataset.memberdel){
+    const m = S.family.find(x=>x.id===t.dataset.memberdel);
+    S.family = S.family.filter(x=>x.id!==t.dataset.memberdel);
+    await persist(); go('profile'); toast(`${m?m.name:'Gezinslid'} verwijderd`);
+    return;
+  }
+  if(t.dataset.savemember){
+    const name = $('m-name').value.trim();
+    if(!name){ toast('Geef het gezinslid eerst een naam'); return; }
+    const stages = [...document.querySelectorAll('#m-stages .chip.on')].map(c=>c.dataset.stage);
+    const mem = {
+      id: t.dataset.savemember === 'new' ? uid() : t.dataset.savemember,
+      name, stages,
+      eat: $('m-eat').classList.contains('on'),
+      note: $('m-note').value.trim(),
+      allergies: [...document.querySelectorAll('#m-allergies .chip.on')].map(c=>c.dataset.allergen),
+      allergyText: ($('m-allergytext') ? $('m-allergytext').value.trim() : '')
+    };
+    const i = S.family.findIndex(x=>x.id===mem.id);
+    const old = i>=0 ? S.family[i] : null;
+    /* bewaar wat de AI eerder vond, tenzij de situatie verandert */
+    const same = old && JSON.stringify([old.stages, old.allergies, old.allergyText, old.note])
+                     === JSON.stringify([mem.stages, mem.allergies, mem.allergyText, mem.note]);
+    if(same && old.ai) mem.ai = old.ai;
+    if(i>=0) S.family[i] = mem; else S.family.push(mem);
+    await persist(); go('profile','member',mem.id); toast('Gezinslid opgeslagen');
+    /* nieuwe situatie? dan meteen laten uitzoeken wat daarbij hoort */
+    if(!same && aiKey()) researchMember(mem.id);
+    return;
+  }
+
+  if(t.id === 'cookExit'){ closeCook(); return; }
+  if(t.id === 'cookPrev'){ if(cook.i>0){ cook.i--; drawStep(); } return; }
+  if(t.id === 'cookNext'){
+    if(cook.i < cook.steps.length-1){ cook.i++; drawStep(); }
+    else { closeCook(); toast('Eet smakelijk'); }
+    return;
+  }
+  if(t.dataset.addtimer){ addStepTimer(+t.dataset.addtimer, t.dataset.tlabel, cook.i); drawStep(); return; }
+  if(t.dataset.ttoggle){ toggleTimerById(t.dataset.ttoggle); return; }
+  if(t.dataset.tdismiss){ dismissTimer(t.dataset.tdismiss); return; }
+});
+
+document.addEventListener('keydown', e=>{
+  if(e.key !== 'Enter') return;
+  if(e.target.id === 'shop-in'){ $('shop-add').click(); }
+  if(e.target.id === 'pan-in'){ $('pan-add').click(); }
+  if(e.target.id === 'cookQ'){ $('cookQGo').click(); }
+});
+
+/* ---------------- aanraken: lang indrukken en terugvegen ----------------
+   Eén paar luisteraars voor allebei. Lang indrukken op een receptkaart opent
+   het menu; een veeg van links naar rechts gaat terug. Beweegt de vinger
+   voor de 380 ms meer dan 8 px, dan is het geen lange druk maar een veeg. */
+let raak = null, drukKlok = null, slikKlik = false;
+
+const veegAan = () => !(S.prefs && S.prefs.veeg === false);
+
+/* waar 'terug' heen gaat, gezien wat er nu openstaat */
+function veegTerug(){
+  if(menuData){ closeMenu(); return true; }
+  if($('care').classList.contains('on')){ $('care').classList.remove('on'); careAsk = null; return true; }
+  if($('warn').classList.contains('on')){ $('warn').classList.remove('on'); return true; }
+  if($('ask').classList.contains('on')){ closeAsk(); return true; }
+  if($('cook').classList.contains('on')){ closeCook(); return true; }
+  if(S.view === 'cand'){ go('recipes','picks'); return true; }
+  if(S.view === 'member' || S.view === 'memberEdit'){ go('profile'); return true; }
+  if(S.view){ go(S.tab); return true; }
+  if(S.tab !== 'home'){ go('home'); return true; }
+  return false;
+}
+/* Een tik op een veld of knop gaat vaak met een beetje duimbeweging. Dat mag
+   nooit als terugveeg tellen — anders spring je weg terwijl je iets invult. */
+function veegMag(el){
+  if(!el || !el.closest) return true;
+  if(el.closest('input, textarea, select')) return false;
+  /* in een openstaande pop-up mag je overal wegvegen; die is toch tijdelijk */
+  if(el.closest('.sheet.on')) return true;
+  if(el.closest('button, a, label, [contenteditable], .chip, .tickbox, .imp-fotos, .chips')) return false;
+  const a = document.activeElement;
+  if(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return false;
+  return true;
+}
+
+document.addEventListener('pointerdown', e=>{
+  if(e.pointerType === 'mouse' && e.button !== 0) return;
+  /* een vorige veeg zonder klik erna mag de volgende tik niet opeten */
+  slikKlik = false;
+  /* Terugvegen mag alleen tellen als je 'm start vlak bij de linkerrand
+     (net als de systeem-terugveeg van iOS zelf). Eerst gold dit voor het
+     hele scherm: een gewone tik op een brede kaart, met een klein beetje
+     duimbeweging tijdens het loslaten, werd dan per ongeluk gezien als
+     "terugvegen" en de app sprong dan stil terug naar Start — precies
+     wat het leek alsof knoppen niet reageerden. */
+  const bijRand = e.clientX <= 24;
+  raak = {x:e.clientX, y:e.clientY, t:Date.now(), veeg: bijRand && veegMag(e.target)};
+  const kaart = e.target.closest && e.target.closest('[data-open]');
+  if(kaart){
+    drukKlok = setTimeout(()=>{
+      drukKlok = null; slikKlik = true; raak = null;
+      if(navigator.vibrate) try{ navigator.vibrate(12); }catch(_){}
+      receptMenu(kaart.dataset.open);
+    }, 380);
+  }
+}, {passive:true});
+
+document.addEventListener('pointermove', e=>{
+  if(!raak) return;
+  if(drukKlok && Math.hypot(e.clientX - raak.x, e.clientY - raak.y) > 8){
+    clearTimeout(drukKlok); drukKlok = null;
+  }
+}, {passive:true});
+
+document.addEventListener('pointerup', e=>{
+  if(drukKlok){ clearTimeout(drukKlok); drukKlok = null; }
+  if(!raak) return;
+  const dx = e.clientX - raak.x, dy = e.clientY - raak.y, tijd = Date.now() - raak.t;
+  const r = raak; raak = null;
+  if(!r.veeg || !veegAan()) return;
+  /* echt zijwaarts bedoeld: ruim naar rechts en veel meer horizontaal dan verticaal */
+  if(dx > 90 && Math.abs(dy) < 45 && Math.abs(dx) > Math.abs(dy) * 2.5 && tijd < 700){
+    if(veegTerug()) slikKlik = true;
+  }
+}, {passive:true});
+document.addEventListener('pointercancel', ()=>{
+  if(drukKlok){ clearTimeout(drukKlok); drukKlok = null; }
+  raak = null;
+}, {passive:true});
+
+/* Losse functies (in plaats van alles inline in de change-listener) zodat
+   we ze straks ook kunnen aanroepen vanuit het vangnet hieronder, voor als
+   iOS na de fotokiezer geen 'change' stuurt maar het bestand wel op het
+   veld heeft gezet. */
+async function verwerkPanPhotoInput(f){ if(f) await scanPantry(f); }
+async function verwerkBackupInput(f){ if(f) await backupInlezen(f); }
+async function verwerkImpFileInput(f){ if(f) await loadRecipeFile(f); }
+async function verwerkRecFotoInput(f){
+  if(!f || !fotoVoor) return;
+  const r = S.recipes.find(x=>x.id===fotoVoor);
+  try{
+    const foto = await bestandNaarFoto(f);
+    if(r){ r.foto = foto; await persist(); render(); toast('Foto toegevoegd'); }
+  }catch(err){ toast(err.message || 'Deze foto kon ik niet lezen'); }
+}
+async function verwerkImpFotoInput(lijst){ if(lijst && lijst.length) await voegFotosToe(lijst); }
+
+document.addEventListener('change', async e=>{
+  if(e.target.dataset.day !== undefined){
+    const d = e.target.dataset.day;
+    if(e.target.value) S.plan[d] = e.target.value; else delete S.plan[d];
+    await persist(); render();
+  }
+  if(e.target.dataset.slider){ S.prefs[e.target.dataset.slider] = +e.target.value; await persist(); }
+  if(e.target.id === 'pan-photo-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; await verwerkPanPhotoInput(f); }
+  if(e.target.id === 'backup-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; await verwerkBackupInput(f); }
+  if(e.target.id === 'imp-file'){ const f = e.target.files && e.target.files[0]; e.target.value=''; await verwerkImpFileInput(f); }
+  if(e.target.id === 'rec-foto-input'){ const f = e.target.files && e.target.files[0]; e.target.value=''; await verwerkRecFotoInput(f); }
+  if(e.target.id === 'imp-foto'){ const fs = e.target.files; const lijst = fs ? [].slice.call(fs) : []; e.target.value=''; await verwerkImpFotoInput(lijst); }
+  /* sleutel ook bewaren als je het veld verlaat zonder op ✓ te drukken */
+  if(e.target.id === 'ai-key'){ saveAiKey(e.target.value); }
+});
+
+/* VANGNET voor een bekende eigenaardigheid op iOS (vooral als 'thuisschermapp'):
+   soms komt de fotokiezer terug zonder dat het 'change'-event van het
+   verborgen bestandsveld afgaat — de foto staat dan wél op het veld
+   (input.files), alleen hoort de app er niets van en blijft het scherm
+   ogenschijnlijk "niets doen". Daarom controleren we, elke keer dat de app
+   weer in beeld komt, gewoon zelf of er ergens een bestand klaarstaat dat
+   nog niet verwerkt is — ongeacht of het change-event wel of niet kwam. */
+async function vangGemisteBestanden(){
+  const velden = [
+    ['pan-photo-input', els => verwerkPanPhotoInput(els[0])],
+    ['backup-input',    els => verwerkBackupInput(els[0])],
+    ['imp-file',        els => verwerkImpFileInput(els[0])],
+    ['rec-foto-input',  els => verwerkRecFotoInput(els[0])],
+    ['imp-foto',        els => verwerkImpFotoInput(els)]
+  ];
+  let iets = false;
+  for(const [id, doe] of velden){
+    const el = document.getElementById(id);
+    if(el && el.files && el.files.length){
+      /* eerst het bestand zelf vasthouden — pas dan het veld leegmaken,
+         anders ben je 'm net kwijt voordat je 'm gebruikt */
+      const bestanden = [].slice.call(el.files);
+      el.value = '';
+      iets = true;
+      try{ await doe(bestanden); }catch(e){}
+    }
+  }
+  return iets;
+}
+
+/* De app komt soms al in beeld vóórdat iOS de gekozen/gemaakte foto echt
+   aan het bestandsveld heeft doorgegeven (een fotokiezer of de Camera-app
+   sluit iets eerder dan de foto zelf klaarstaat). Eén controle direct bij
+   het terugkomen is dan te vroeg. Daarom blijven we, telkens als de app
+   weer in beeld komt, een paar seconden lang om de 300ms checken — zodra
+   er iets gevonden is stoppen we meteen. */
+let vangnetBezig = false;
+function planVangnet(){
+  if(vangnetBezig) return;
+  vangnetBezig = true;
+  let pogingen = 0;
+  const klok = setInterval(async ()=>{
+    pogingen++;
+    const gevonden = await vangGemisteBestanden();
+    if(gevonden || pogingen >= 12){ clearInterval(klok); vangnetBezig = false; }
+  }, 300);
+}
+/* Vangnet nummer twee, onafhankelijk van visibilitychange/focus/pageshow:
+   als thuisschermapp vuurt iOS die events niet altijd betrouwbaar af rond
+   de Camera-app, dus vertrouwen we daar niet blind op. Dit tikkertje loopt
+   gewoon de hele tijd op de achtergrond mee (elke seconde een paar bytes
+   checken op 5 velden kost niets) en pikt een foto dus sowieso op, wat er
+   verder ook wel of niet aan events afgaat. */
+setInterval(vangGemisteBestanden, 1000);
+document.addEventListener('input', e=>{
+  const sl = e.target.closest && e.target.closest('[data-slider]');
+  if(sl){ const k = sl.dataset.slider; S.prefs[k] = +sl.value; const v = document.getElementById('val-'+k); if(v) v.textContent = sl.value+'×'; }
+});
+
+/* ---------------- boot ---------------- */
+(async function(){
+  await PanklaarSecurity.open(loadLegacyData,async()=>{
+    await idbReq('readwrite',store=>store.delete(KEY));
+    for(const name of ['panklaar_ai_key','panklaar_openai_key'])localStorage.removeItem(name);
+  });
+  const d = await loadData();
+  if(d){ Object.assign(S, d); if(!S.family) S.family = seedFamily(); if(!S.equip) S.equip = seedEquip(); if(!S.prefs) S.prefs = {...DEFAULT_PREFS}; }
+  else { S.recipes = seed(); S.family = []; S.equip = seedEquip(); S.prefs = {...DEFAULT_PREFS}; await persist(); }
+  applyTheme();
+  if(!S.timers) S.timers = [];
+  if(!S.usage) S.usage = {};
+  if(!(+S.budget > 0)) S.budget = 5;
+  if(!DIENSTEN[S.aiDienst]) S.aiDienst = 'anthropic';
+  if(!S.aiModellen) S.aiModellen = {};
+  /* ?add=honing,koekjes,zalm — zo kan een Siri-opdracht items aanleveren */
+  try{
+    const q = new URLSearchParams(location.search).get('add');
+    if(q){
+      const items = q.split(/[,;\n]+/).map(x=>x.trim()).filter(Boolean);
+      if(items.length){
+        addToList(items);
+        S.tab = 'shopping';
+        setTimeout(()=>toast(`${items.length} item${items.length===1?'':'s'} toegevoegd`), 400);
+      }
+      history.replaceState({}, '', location.pathname);   /* link weer schoon */
+    }
+  }catch(e){}
+  render();
+  catchUpTimers();
+  setupSecurityUI();
+  document.addEventListener('visibilitychange', ()=>{ if(!document.hidden){ catchUpTimers(); planVangnet(); } });
+  window.addEventListener('focus', ()=>{ catchUpTimers(); planVangnet(); });
+  window.addEventListener('pageshow', planVangnet);
+})().catch(showSecurityError);
+
+function showSecurityError(error){
+ const dialog=$('wachtwoordDialoog');$('wachtwoordTitel').textContent='Panklaar kan niet worden geopend';$('wachtwoordUitleg').textContent=error.message+' Je opgeslagen gegevens zijn niet verwijderd.';dialog.querySelectorAll('input,button,label').forEach(e=>e.hidden=true);if(!dialog.open)dialog.showModal();
+}
+async function lockPanklaar(){try{await PanklaarSecurity.flush();location.reload();}catch(e){toast(e.message);}}
+function setupSecurityUI(){
+ const banner=$('pk-migratie');banner.hidden=false;
+ const lock=document.createElement('button');lock.className='btn';lock.textContent='Vergrendelen';lock.onclick=lockPanklaar;banner.appendChild(lock);
+ const message=document.createElement('p');message.textContent='Je gegevens en nieuwe back-ups zijn versleuteld. Plak je AI-sleutel bij Jij; de sleutel blijft alleen in deze ontgrendelde sessie beschikbaar.';banner.appendChild(message);
+ if(location.hostname.endsWith('github.io')){const p=document.createElement('p');p.textContent='Sla hier eerst een back-up op en zet die terug op het nieuwe adres: ';const a=document.createElement('a');a.href='https://panklaar.zsj4j2s4df.workers.dev/';a.textContent='Panklaar openen';a.rel='noopener noreferrer';p.appendChild(a);banner.appendChild(p);}
+ let idle;const reset=()=>{clearTimeout(idle);idle=setTimeout(()=>{if($('cook').classList.contains('on')||(S.timers||[]).some(t=>t.running&&!t.done)){reset();return;}lockPanklaar();},10*60*1000);};for(const ev of ['pointerdown','keydown','input'])document.addEventListener(ev,reset,{passive:true});reset();
+}

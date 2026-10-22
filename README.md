@@ -1,8 +1,7 @@
 # Panklaar 🍳
 
-Een hand-getekende kookapp (pen-op-papier stijl) voor privégebruik. Eén bestand,
-vanilla JS, geen build-stap, geen framework, geen account. Data blijft lokaal op
-het apparaat (IndexedDB).
+Een hand-getekende kookapp (pen-op-papier stijl) voor privégebruik. Vanilla JS, geen framework en geen account. Data blijft lokaal en versleuteld op
+het apparaat (IndexedDB). Zie onderaan voor de beveiligde versie en het bouwen.
 
 ## Wat zit erin
 
@@ -74,8 +73,8 @@ Je kiest zelf de dienst onder **Jij → AI-dienst**:
 | Claude (Anthropic) | `POST /v1/messages` | `claude-sonnet-4-6` |
 | OpenAI | `POST /v1/responses` | `gpt-5-mini` |
 
-Elke dienst heeft zijn eigen sleutel (apart in `localStorage`) en zijn eigen
-modelnaam, dus wisselen kan zonder iets kwijt te raken. Het model is een gewoon
+Elke dienst heeft een eigen sleutel in het geheugen van de ontgrendelde sessie
+en een eigen modelnaam. Na vergrendelen vul je de sleutel opnieuw in. Het model is een gewoon
 tekstveld: kent de dienst de naam niet, dan zie je die melding terug en vul je
 een andere in. Het zoeken naar bestaande recepten gebruikt bij Claude de
 `web_search`-tool en bij OpenAI de ingebouwde `web_search` van de Responses API.
@@ -103,10 +102,10 @@ elke nieuwe maand begint opnieuw.
 
 Goed om te weten:
 
-- De sleutel blijft in de opslag van je eigen browser en gaat nergens anders
-  heen. Hij staat niet in de code en niet in een back-up.
-- Elke website bewaart z'n eigen sleutel. Gebruik je de app ook op een andere
-  telefoon of laptop, plak hem daar dan opnieuw.
+- De sleutel blijft in het geheugen van de ontgrendelde sessie en gaat alleen
+  naar de gekozen AI-dienst om aanvragen te authenticeren. Hij staat niet in
+  de code, permanente browseropslag of een back-up.
+- Plak de sleutel na herladen of vergrendelen opnieuw in, ook op andere apparaten.
 - De kosten zijn klein: grofweg een paar cent per keer dat je recepten laat
   bedenken.
 - De voedingsregels bij gezinsleden volgen publieke richtlijnen van het
@@ -125,3 +124,88 @@ Lokaal testen kan met een simpele webserver, bijv. `python3 -m http.server`.
 De hele identiteit is de hand-getekende look: SVG-wobble-filters op randen,
 inline SVG-iconen (nooit emoji) en dubbel-getekende contouren. Het getekende
 pannetje is het logo.
+
+## Beveiligde versie v38
+
+Online: **https://panklaar.zsj4j2s4df.workers.dev/**.
+
+Recepten, foto's en gezins-/allergiegegevens worden lokaal versleuteld in
+IndexedDB opgeslagen met AES-256-GCM. Het wachtwoord wordt via PBKDF2-SHA256
+(600.000 iteraties, willekeurig zout van 16 bytes) naar een sleutel omgezet.
+Elke opslagbewerking gebruikt een nieuwe willekeurige IV van 12 bytes.
+Het wachtwoord en de ontsleutelsleutel worden nooit opgeslagen of verzonden.
+Bewaar je wachtwoord in een wachtwoordmanager: zonder wachtwoord bestaat geen
+herstelmogelijkheid. Maak regelmatig een versleutelde back-up.
+
+De app vergrendelt na 10 minuten inactiviteit, behalve tijdens de kookstand of
+zolang er een timer loopt. Je kunt ook zelf op Vergrendelen drukken. Opgeslagen
+timers blijven behouden, maar kunnen pas na ontgrendelen opnieuw melden.
+Een tweede tabblad kan niet tegelijk schrijven. Opslaan is pas geslaagd wanneer
+de IndexedDB-transactie is voltooid; bij een fout blijft de eerdere kopie staan.
+
+API-sleutels plak je zelf onder Jij. Ze blijven uitsluitend in het geheugen van
+de ontgrendelde sessie en ontbreken in browseropslag en back-ups. Na vergrendelen
+of herladen moet je ze opnieuw invullen. Op het oude apparaat worden eerdere
+onversleutelde sleutels verwijderd na het succesvol openen van de beveiligde
+opslag. Ze worden niet automatisch gebruikt. De eerste AI-aanvraag van een
+sessie vraagt toestemming voordat gegevens naar de gekozen dienst gaan.
+Daarbij kunnen recepten, foto's en gezins-/allergiegegevens worden gedeeld.
+Tijdens deze beveiligingscontrole zijn alleen gesimuleerde AI-antwoorden
+gebruikt: er zijn geen echte API-aanvragen met sleutels uitgevoerd.
+
+Imports worden begrensd en vóór opslag gecontroleerd. Actieve foto-URL's,
+HTML-attribuutinjecties, onbekende velden, ongeldige identifiers en verkeerde
+gegevenstypen worden geweigerd. Foto's zijn uitsluitend lokale PNG/JPEG/WebP-
+data-URL's. Uit back-ups ingelezen patronen worden niet meer als vrije reguliere
+expressies uitgevoerd. Gezinsregels blijven algemene hulpmiddelen: controleer
+allergenen altijd zelf en vertrouw voor medische beslissingen niet op AI.
+
+De aparte Cloudflare-host stuurt CSP, HSTS, frameblokkering, no-referrer,
+nosniff en andere browserbeveiligingsheaders. API-verkeer mag uitsluitend naar
+OpenAI en Anthropic. De app blijft offline bruikbaar; de service worker bewaart
+alleen de eigen appbestanden en verwijdert geen caches van andere apps.
+Versleuteling beschermt niet tegen malware of onbetrouwbare extensies/code
+terwijl je de app gebruikt. Oude, reeds gemaakte JSON-back-ups blijven leesbaar.
+
+### Bestaande gegevens overzetten
+
+1. Open https://zsj4j2s4df-pixel.github.io/Panklaar/ op het apparaat waar je
+   recepten staan. Kies een wachtwoord; bestaande gegevens worden pas verwijderd
+   nadat de versleutelde kopie is opgeslagen.
+2. Kies Jij → Back-up → Back-up maken.
+3. Open het nieuwe Cloudflare-adres, kies een wachtwoord en zet de back-up terug.
+4. Vul het wachtwoord van de back-up in en controleer de gegevens. Plak je
+   API-sleutel opnieuw in de app.
+
+De app accepteert ook oudere JSON-back-ups. Terugzetten vervangt de hele
+verzameling, na controle en een bevestiging. Gegevens gaan niet automatisch
+mee naar een ander adres, apparaat of browser.
+
+### Ontwikkelen en publiceren
+
+```sh
+npm ci
+npx playwright install chromium
+npm test
+npm run build
+```
+
+De build bevat alleen expliciet toegestane publieke bestanden. De Cloudflare
+Worker staat in `worker.mjs`; `dist/worker-bundle.mjs` is het uploadbestand.
+`wrangler.jsonc` beschrijft de configuratie. GitHub Actions test beveiliging,
+import/export, migratie, offline gebruik, timers, gezinsleden en appfuncties.
+Deploy wijzigingen opnieuw naar Cloudflare na geslaagde controles. Hiervoor
+staat geen API-token in de repository.
+
+Branchbeveiliging vraagt afzonderlijke GitHub-beheerrechten. De beschikbare
+koppeling miste deze rechten bij de eerdere Kasboek-publicatie. Met een geschikte
+beheerkoppeling kan de klaargezette configuratie worden toegepast:
+
+```sh
+gh api --method PUT repos/zsj4j2s4df-pixel/Panklaar/branches/main/protection \
+  --input scripts/branch-protection.json
+```
+
+Deze configuratie vereist een pull request en geslaagde automatische controles,
+ook voor beheerders. Ze blokkeert force pushes en verwijderen van `main`.
+Voor een persoonlijke repository is geen tweede menselijke goedkeurder vereist.
