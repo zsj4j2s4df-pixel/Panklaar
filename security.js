@@ -54,8 +54,8 @@ const PanklaarSecurity=(()=>{
  }
  function db(){return new Promise((resolve,reject)=>{const r=indexedDB.open('panklaar-secure',1);r.onupgradeneeded=()=>r.result.createObjectStore('vault');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});}
  async function storage(mode,value){const database=await db();try{return await new Promise((resolve,reject)=>{const tx=database.transaction('vault',mode),s=tx.objectStore('vault');const req=mode==='readonly'?s.get('v1'):s.put(value,'v1');tx.oncomplete=()=>resolve(req.result);tx.onerror=tx.onabort=()=>reject(tx.error||new Error('Opslaan mislukt'));});}finally{database.close();}}
- const b64=b=>{let s='';for(const x of b)s+=String.fromCharCode(x);return btoa(s);};
- const from64=s=>{if(typeof s!=='string'||s.length>MAX*1.4||!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(s))fail();return Uint8Array.from(atob(s),c=>c.charCodeAt(0));};
+ const b64=bytes=>{const chunks=[];for(let i=0;i<bytes.length;i+=32768)chunks.push(String.fromCharCode(...bytes.subarray(i,i+32768)));return btoa(chunks.join(''));};
+ const from64=s=>{if(typeof s!=='string'||s.length>MAX*1.4||s.length%4!==0||!/^[A-Za-z0-9+/]*={0,2}$/.test(s))fail();const decoded=atob(s),bytes=new Uint8Array(decoded.length);for(let i=0;i<decoded.length;i++)bytes[i]=decoded.charCodeAt(i);return bytes;};
  let key,salt,data=null,queue=Promise.resolve(),pending=0,failed=false,active=false;
  const aad=enc.encode('panklaar-vault:1:PBKDF2-SHA256:600000:AES-256-GCM');
  async function derive(password,s){const base=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveKey']);return crypto.subtle.deriveKey({name:'PBKDF2',hash:'SHA-256',salt:s,iterations:ITER},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);}

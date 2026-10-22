@@ -125,7 +125,7 @@ De hele identiteit is de hand-getekende look: SVG-wobble-filters op randen,
 inline SVG-iconen (nooit emoji) en dubbel-getekende contouren. Het getekende
 pannetje is het logo.
 
-## Beveiligde versie v38
+## Beveiligde versie v39
 
 Online: **https://panklaar.zsj4j2s4df.workers.dev/**.
 

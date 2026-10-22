@@ -6,7 +6,7 @@
 const KEY = 'panklaar:v1';
 /* Wordt bij het uitrollen gelijkgezet met de cache van de service worker,
    zodat je in de app kunt zien welke versie je telefoon vasthoudt. */
-const APP_VERSIE = 'v38';
+const APP_VERSIE = 'v39';
 let mem = null;
 let restoring=false;
 

@@ -75,3 +75,10 @@ test('idle lock clears the key; cooking keeps the app available',async({page})=>
  await page.locator('#wachtwoord').fill(PASS);await page.locator('#wachtwoordDoorgaan').click();await expect(page.locator('#wachtwoordDialoog')).not.toBeVisible();expect(await page.evaluate(()=>aiKey())).toBe('');
  await page.evaluate(()=>openCook(S.recipes[0].id));await flush(page);await page.clock.fastForward(10*60*1000+1000);await expect(page.locator('#wachtwoordDialoog')).not.toBeVisible();await expect(page.locator('#cook')).toHaveClass(/on/);
 });
+
+test('large photo back-ups decode without regex stack overflow or unbounded argument spreads',async({page})=>{
+ await unlock(page);
+ await page.evaluate(async r=>{window.photoBackup=await PanklaarSecurity.backup({...pack(),recipes:[{...r,foto:'data:image/png;base64,'+'A'.repeat(4500000)}]});},recipe);
+ const restored=page.evaluate(async()=>{const file=new File([window.photoBackup],'photos.json',{type:'application/json'});const d=await PanklaarSecurity.readBackup(file);return d.recipes[0].foto.length;});
+ await page.locator('#wachtwoordDialoog').waitFor({state:'visible'});await page.locator('#wachtwoord').fill(PASS);await page.locator('#wachtwoordDoorgaan').click();expect(await restored).toBe(4500022);
+});
