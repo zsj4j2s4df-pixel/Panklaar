@@ -44,6 +44,25 @@ test('timer uses the timed action instead of the first ingredient and supports c
  });expect(labels).toEqual(['rijst','kipfilet','rijst','wijn']);
  await page.evaluate(()=>{S.recipes[0].steps=['Snijd de kip. Kook de rijst 12 minuten.'];S.recipes[0].ingredients=['300 g kipfilet','200 g rijst'];openCook(S.recipes[0].id);});await expect(page.locator('#cook-timer-label')).toHaveValue('rijst');await page.locator('#cook-timer-label').fill('Rijst zacht koken');await page.locator('[data-addtimer]').tap();await expect(page.locator('#cookTimers')).toContainText('Rijst zacht koken');expect(await page.evaluate(()=>S.timers[0].label)).toBe('Rijst zacht koken');
 });
+test('timer names the food added to the pan, including additions from the preceding step',async({page})=>{
+ await open(page);
+ const labels=await page.evaluate(()=>{
+  const list=['300 g kipfilet','200 g rijst','1 rode ui','2 tenen knoflook','20 g boter','100 ml witte wijn'];
+  return [
+   ['Bak de kip in boter. Voeg de ui toe en bak 5 minuten.','ui'],
+   ['Voeg de ui toe aan de kip en laat 5 minuten bakken.','ui'],
+   ['Voeg de ui en knoflook toe en bak 3 minuten.','ui en knoflook'],
+   ['Smelt de boter 2 minuten.','boter'],
+   ['Kook de rijst 12 minuten en bak daarna de kip.','rijst'],
+   ['Bak de kip 5 minuten. Voeg daarna de ui toe.','kipfilet'],
+   ['Verwarm de oven 10 minuten voor.','oven'],
+  ].map(([step,expected])=>({actual:timerLabel(step,list,step.search(/\d+\s*min/)),expected}));
+ });
+ for(const label of labels)expect(label.actual).toBe(label.expected);
+ await page.evaluate(()=>{S.recipes[0].steps=['Bak de kip. Voeg de ui toe aan de kip.','Laat 5 minuten bakken.'];S.recipes[0].ingredients=['300 g kipfilet','1 rode ui'];openCook(S.recipes[0].id);});
+ await page.locator('#cookNext').tap();await expect(page.locator('#cook-timer-label')).toHaveValue('ui');await page.locator('[data-addtimer]').tap();await expect(page.locator('#cookTimers')).toContainText('ui');expect(await page.evaluate(()=>S.timers[0].label)).toBe('ui');
+});
+
 test('trusted device stays unlocked after reload but manual locking revokes it',async({page})=>{
  await open(page,true);await page.evaluate(()=>{S.pantry.push('bewaarde tomaat');saveAiKey('synthetic-session-key');return persist();});await page.evaluate(()=>PanklaarSecurity.flush());await page.reload();await expect(page.locator('#screen')).toContainText('Panklaar');await expect(page.locator('#wachtwoordDialoog')).not.toBeVisible();expect(await page.evaluate(()=>PanklaarSecurity.isRemembered())).toBeTruthy();expect(await page.evaluate(()=>aiKey())).toBe('');expect(await page.evaluate(()=>S.pantry)).toContain('bewaarde tomaat');
  await page.locator('#nav [data-tab="profile"]').tap();await expect(page.locator('#remember-device')).toBeChecked();await page.locator('#pk-lock').tap();await expect(page.locator('#wachtwoordDialoog')).toBeVisible();await enterPassword(page);expect(await page.evaluate(()=>PanklaarSecurity.isRemembered())).toBeFalsy();
