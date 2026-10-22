@@ -41,7 +41,7 @@ function allowAI(){
   if(!confirm('Voor deze AI-functie worden je vraag, recept en eventueel foto’s en gezins-/allergiegegevens naar de gekozen AI-dienst gestuurd. Dit kan API-kosten veroorzaken. Doorgaan voor deze ontgrendelde sessie?'))throw new Error('AI-aanvraag geannuleerd.');
   aiConsent=true;
 }
-/* AI-sleutel — alleen op dit apparaat (localStorage) */
+/* AI-sleutel — uitsluitend in het geheugen van de ontgrendelde sessie. */
 const AI_MODEL = 'claude-sonnet-4-6';
 let lastAiError = '';
 
@@ -1145,7 +1145,7 @@ function viewProfile(){
     </div>
     <div class="eyebrow"><span>Goed om te weten</span></div>
     <div class="sketch soft card" style="margin-bottom:20px">
-      <div class="step"><span class="n">·</span><span class="tx">De sleutel blijft in deze ontgrendelde sessie en gaat nergens anders heen.</span></div>
+      <div class="step"><span class="n">·</span><span class="tx">De sleutel blijft in het geheugen van deze sessie en wordt alleen voor authenticatie naar de gekozen AI-dienst gestuurd.</span></div>
       <div class="step"><span class="n">·</span><span class="tx">Elke website bewaart z'n eigen sleutel. Gebruik je Panklaar ook op een andere telefoon, plak hem daar dan opnieuw.</span></div>
       <div class="step"><span class="n">·</span><span class="tx">Claude en OpenAI hebben elk hun eigen sleutel en hun eigen tegoed. Wisselen kan altijd; wat je invulde blijft staan.</span></div>
       <div class="step"><span class="n">·</span><span class="tx">De kosten zijn klein: grofweg een paar cent per keer dat je recepten laat bedenken.</span></div>
@@ -2905,7 +2905,7 @@ document.addEventListener('click', async (e)=>{
   if(t.dataset.theme){ S.theme = t.dataset.theme; applyTheme(); await persist(); render(); return; }
   if(t.id === 'ai-save'){
     const ok = saveAiKey($('ai-key').value);
-    lastAiError=''; toast(ok ? 'AI-sleutel opgeslagen' : 'Opslaan lukt niet in deze browser'); render(); return;
+    lastAiError=''; toast(ok ? 'AI-sleutel klaar voor deze sessie' : 'Opslaan lukt niet in deze browser'); render(); return;
   }
   if(t.id === 'ai-test'){
     saveAiKey($('ai-key').value);
